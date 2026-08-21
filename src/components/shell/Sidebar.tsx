@@ -8,6 +8,7 @@ import {
   LayoutDashboard,
   PanelLeftClose,
   PanelLeftOpen,
+  GitPullRequestArrow,
   ShieldAlert,
   Users,
   Wallet,
@@ -30,6 +31,12 @@ const NAV: NavItem[] = [
   { href: "/schedule", label: "Schedule", icon: CalendarRange, hint: "WBS, activities and the critical path" },
   { href: "/cost", label: "Cost", icon: Wallet, hint: "Control accounts, commitments and forecast" },
   { href: "/risk", label: "Risk", icon: ShieldAlert, hint: "Register, matrix and mitigation" },
+  {
+    href: "/changes",
+    label: "Changes",
+    icon: GitPullRequestArrow,
+    hint: "Change orders, trends and the budget they move",
+  },
   { href: "/documents", label: "Documents", icon: FileText, hint: "Deliverable register and review status" },
   {
     href: "/users",

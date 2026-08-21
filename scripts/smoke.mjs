@@ -6,6 +6,8 @@
  * if the behaviour regresses rather than relying on anyone's word:
  *
  *   - the roll-up: a schedule edit must move project EVM
+ *   - the change-order chain: approving one must move the budget it names,
+ *     and rejecting it must give that money back
  *   - the auth gate: no page, read or write without a session
  *   - authorisation: each role may do exactly what its permissions say, and a
  *     scoped account cannot see or touch a project it was not granted
@@ -209,6 +211,23 @@ check("planner may edit the schedule", (await patchTask(asPlanner)).status === 2
 const plannerRisk = await patchRisk(asPlanner);
 check("planner may NOT edit a risk", plannerRisk.status === 403, `status ${plannerRisk.status}`);
 
+// Change orders are the commercial position, governed by the same permission
+// as the cost view.
+const anyOrder = (
+  await (await get("/api/projects/prj-gc4410/change-orders", { headers: asLead })).json()
+).changeOrders[0];
+const decide = (headers) =>
+  get(`/api/change-orders/${anyOrder.id}`, {
+    method: "PATCH",
+    headers,
+    body: JSON.stringify({ owner: "smoke test" }),
+  });
+check("controls lead may amend a change order", (await decide(asLead)).status === 200);
+const plannerChange = await decide(asPlanner);
+check("planner may NOT amend a change order", plannerChange.status === 403, `status ${plannerChange.status}`);
+const viewerChange = await decide(asViewer);
+check("viewer may NOT amend a change order", viewerChange.status === 403, `status ${viewerChange.status}`);
+
 const viewerTask = await patchTask(asViewer);
 check("viewer may NOT edit the schedule", viewerTask.status === 403, `status ${viewerTask.status}`);
 
@@ -250,6 +269,10 @@ check("out-of-scope project reads as absent", outOfScope.status === 404, `status
 check(
   "out-of-scope schedule reads as absent",
   (await get("/api/projects/prj-nv2208/schedule", { headers: asViewer })).status === 404
+);
+check(
+  "out-of-scope change register reads as absent",
+  (await get("/api/projects/prj-nv2208/change-orders", { headers: asViewer })).status === 404
 );
 check(
   "out-of-scope agent turn refused",
@@ -396,6 +419,137 @@ check(
   "agent quotes the current SPI",
   body.includes(current.spi.toFixed(3)),
   `expected ${current.spi.toFixed(3)}`
+);
+
+
+// ---------------------------------------------------------------------------
+// Change orders drive the budget
+//
+// The same invariant as the roll-up, one step up: the register is the source
+// of `cost_accounts.approved_changes`, so an approval has to move real money
+// and a reversal has to release it. A page whose approve button changed only
+// its own table would be the "two sets of figures" problem again.
+// ---------------------------------------------------------------------------
+console.log("\nchange orders drive the budget");
+
+const changesUrl = "/api/projects/prj-gc4410/change-orders";
+const changes = async () => (await get(changesUrl, { headers: authed })).json();
+
+let register = await changes();
+check(
+  "the register reconciles to the budget",
+  Math.round(register.summary.currentBudget - register.summary.originalBudget) ===
+    Math.round(register.summary.approved.value),
+  `${Math.round(register.summary.approved.value).toLocaleString()} approved`
+);
+check("no approved order is left unallocated", register.summary.unallocatedApproved === 0);
+
+const open = register.changeOrders.find((c) => c.status === "trend" && c.cost_account_id);
+check("found an open order to decide", Boolean(open), open?.code);
+
+const patchOrder = (headers, body, id = open.id) =>
+  get(`/api/change-orders/${id}`, { method: "PATCH", headers, body: JSON.stringify(body) });
+
+// Approval is the act that moves a budget, so it has to say which budget.
+const noAccount = await patchOrder(authed, {
+  cost_account_id: null,
+  status: "approved",
+  decision_date: "2026-07-01",
+});
+check(
+  "approving with no allocation is refused",
+  noAccount.status === 422 &&
+    (await noAccount.json()).fields?.[0]?.field === "cost_account_id",
+  `status ${noAccount.status}`
+);
+
+// Scoping lives on the row, not the URL: an order cannot be aimed at another
+// project's budget.
+const foreign = await (await get("/api/projects/prj-nv2208/change-orders", { headers: authed })).json();
+const crossProject = await patchOrder(authed, { cost_account_id: foreign.accounts[0].id });
+check(
+  "an allocation into another project is refused",
+  crossProject.status === 422,
+  `status ${crossProject.status}`
+);
+
+const noDate = await patchOrder(authed, { status: "approved" });
+check("approving with no decision date is refused", noDate.status === 422, `status ${noDate.status}`);
+
+const beforeChange = await metrics();
+const approve = await patchOrder(authed, { status: "approved", decision_date: "2026-07-01" });
+check("approval accepted", approve.status === 200, `status ${approve.status}`);
+
+const approved = await approve.json();
+check(
+  "the budget moved by exactly the order's value",
+  Math.round(approved.metrics.bac - beforeChange.bac) === Math.round(open.cost_impact),
+  `${Math.round(beforeChange.bac).toLocaleString()} -> ${Math.round(approved.metrics.bac).toLocaleString()}`
+);
+check(
+  "CPI moved with it",
+  approved.metrics.cpi !== beforeChange.cpi,
+  `${beforeChange.cpi.toFixed(4)} -> ${approved.metrics.cpi.toFixed(4)}`
+);
+check(
+  "the account's own budget carries the change",
+  approved.changeOrders.find((c) => c.id === open.id)?.status === "approved"
+);
+
+// The forecast finish must NOT move: the schedule is a register, not a solver,
+// and applying an approved order's days would assert an entitlement nobody
+// calculated.
+const afterProject = await (await get("/api/projects/prj-gc4410", { headers: authed })).json();
+check(
+  "the forecast finish did not move",
+  afterProject.project.forecast_finish === schedule.project.forecast_finish,
+  afterProject.project.forecast_finish
+);
+
+// Reversing it has to give the money back, not strand it on the account.
+const reverse = await patchOrder(authed, { status: "rejected" });
+check("reversal accepted", reverse.status === 200);
+check(
+  "rejecting released the budget again",
+  Math.round((await reverse.json()).metrics.bac) === Math.round(beforeChange.bac),
+  `back to ${Math.round(beforeChange.bac).toLocaleString()}`
+);
+
+// Raising a trend is open by definition, so it moves nothing.
+const raised = await get(changesUrl, {
+  method: "POST",
+  headers: authed,
+  body: JSON.stringify({
+    title: "Smoke test trend",
+    origin: "Internal",
+    status: "trend",
+    cost_impact: 250_000,
+    raised_date: "2026-07-31",
+  }),
+});
+check("a trend can be raised", raised.status === 201, `status ${raised.status}`);
+check(
+  "raising a trend moves no budget",
+  Math.round((await metrics()).bac) === Math.round(beforeChange.bac)
+);
+
+// A register that let an order be created already approved would have no record
+// of it ever having been asked for.
+const bornApproved = await get(changesUrl, {
+  method: "POST",
+  headers: authed,
+  body: JSON.stringify({
+    title: "Straight to approved",
+    origin: "Client",
+    status: "approved",
+    raised_date: "2026-07-31",
+  }),
+});
+const bornBody = await bornApproved.json().catch(() => ({}));
+check(
+  "a new order cannot be raised already approved",
+  bornApproved.status === 422 && bornBody.fields?.[0]?.field === "status",
+  `${bornApproved.status} ${bornBody.fields?.[0]?.message ?? ""}`
 );
 
 // ---------------------------------------------------------------------------

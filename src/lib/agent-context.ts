@@ -1,3 +1,4 @@
+import { changeOrderSummary, decisionCycleDays } from "@/lib/change-orders";
 import {
   documentSummary,
   listChangeOrders,
@@ -117,10 +118,12 @@ export function buildProjectBriefing(project: Project): string {
   lines.push(docs.byStatus.map((s) => `${s.status}: ${s.count}`).join(", "));
 
   lines.push("");
-  lines.push("## CHANGE ORDERS (code | title | origin | status | cost | schedule days | raised)");
+  lines.push(
+    "## CHANGE ORDERS (code | title | origin | status | cost | schedule days | account | raised)"
+  );
   for (const c of changes) {
     lines.push(
-      `${c.code} | ${c.title} | ${c.origin} | ${c.status} | ${money(c.cost_impact, { sign: true })} | ${c.schedule_impact_days}d | ${shortDate(c.raised_date)}`
+      `${c.code} | ${c.title} | ${c.origin} | ${c.status} | ${money(c.cost_impact, { sign: true })} | ${c.schedule_impact_days}d | ${c.account_code ?? "unallocated"} | ${shortDate(c.raised_date)}`
     );
   }
 
@@ -130,9 +133,22 @@ export function buildProjectBriefing(project: Project): string {
   const pendingValue = changes
     .filter((c) => c.status === "trend" || c.status === "submitted")
     .reduce((sum, c) => sum + c.cost_impact, 0);
+  const changeSummary = changeOrderSummary(project.id);
+  const cycle = decisionCycleDays(project.id);
   lines.push(
-    `Approved change value: ${money(approvedValue, { sign: true })}; pending/trend value: ${money(pendingValue, { sign: true })}`
+    `Approved change value: ${money(approvedValue, { sign: true })} — this IS in the current budget of ${money(changeSummary.currentBudget)} (original ${money(changeSummary.originalBudget)}).`
   );
+  lines.push(
+    `Pending/trend value: ${money(pendingValue, { sign: true })} — this is NOT in any budget or forecast. Never add it to the forecast at completion.`
+  );
+  lines.push(
+    `Approved schedule impact: ${changeSummary.approvedDays}d, recorded but NOT applied to the forecast finish.`
+  );
+  if (cycle.median !== null) {
+    lines.push(
+      `Decision turnaround: median ${cycle.median}d across ${cycle.count} decided, longest ${cycle.longest}d.`
+    );
+  }
 
   return lines.join("\n");
 }
