@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { clientKey, consume, LIMITS, tooManyRequests } from "@/lib/rate-limit";
+import { checkRate, tooManyRequests } from "@/lib/rate-limit";
 import { getDb, one } from "@/lib/db";
 import { riskPatchSchema, toFieldErrors } from "@/lib/validation";
 import type { Risk } from "@/lib/types";
@@ -17,7 +17,7 @@ export async function GET(_req: Request, ctx: { params: Promise<{ id: string }> 
 export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }> }) {
   const { id } = await ctx.params;
 
-  const gate = consume(clientKey(req, "write"), LIMITS.write);
+  const gate = checkRate(req, "write");
   if (!gate.allowed) return tooManyRequests(gate.retryAfterSeconds);
   if (!one<Risk>(`SELECT id FROM risks WHERE id = ?`, [id])) {
     return NextResponse.json({ error: "Risk not found" }, { status: 404 });

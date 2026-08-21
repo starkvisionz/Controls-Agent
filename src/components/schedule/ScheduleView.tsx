@@ -235,7 +235,12 @@ export function ScheduleView() {
         )}
 
         {selected ? (
-          <TaskDetail task={selected} onClose={() => setSelected(null)} onSaved={applyEdit} />
+          <TaskDetail
+            key={`${selected.id}:${selected.percent_complete}:${selected.status}`}
+            task={selected}
+            onClose={() => setSelected(null)}
+            onSaved={applyEdit}
+          />
         ) : null}
       </div>
     </div>

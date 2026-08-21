@@ -158,16 +158,39 @@ an arbitrary column; these stop them putting `631` into an allowed one. Derived
 fields — earned value, severity, expected value — are recomputed server-side and
 rejected if supplied.
 
-**Writes are rate limited and bounded.** Token buckets per client cover the
-agent endpoint (the only path that can spend money at a provider), the write
-routes, and login. Chat messages are capped and oversized bodies refused before
-buffering.
+**Writes are rate limited, and the limit is not caller-controlled.** Token
+buckets cover the agent endpoint (the only path that can spend money at a
+provider), the write routes, and login.
+
+The identity those buckets key on matters more than the numbers. `X-Forwarded-For`
+is a list the client can prepend to, so keying on its leftmost value lets anyone
+mint a fresh bucket per request — that defeats a limit rather than weakening it.
+Hermes believes the header only when `HERMES_TRUSTED_PROXIES` says how many
+proxies sit in front, and then reads only the entry the innermost trusted proxy
+observed. With none declared, every caller shares one bucket: legitimate users
+throttle together, which is the safe direction to be wrong in. A second
+instance-wide ceiling bounds the total regardless of where traffic comes from.
+
+Chat messages are capped and oversized bodies refused before buffering.
 
 **The schedule is a register, not a solver.** Hermes stores predecessors, float
 and critical-path flags but does not run CPM. Editing a forecast date does not
 move successors or recompute float, and the activity inspector says so rather
 than letting a planner assume otherwise. A real scheduling layer — or ingesting
 calculated dates from P6/MSP — is the next step for that view.
+
+## CI
+
+`.github/workflows/ci.yml` runs on every pull request: typecheck, lint, build,
+seed, then `scripts/smoke.mjs` against the built server.
+
+The smoke test asserts the things this README claims rather than leaving them
+as assertions in prose — that a schedule edit moves project EVM, that no page,
+read or write is reachable without a session, that a forged cookie is refused,
+that out-of-range and unknown fields are rejected, that a forged
+`X-Forwarded-For` cannot defeat the rate limit, and that the agent still
+streams SSE and quotes the current figures. It runs with no `ANTHROPIC_API_KEY`,
+so it exercises the local analyst and never depends on a provider.
 
 ## Scripts
 
@@ -178,6 +201,8 @@ calculated dates from P6/MSP — is the next step for that view.
 | `npm run db:seed` | Build and populate the database |
 | `npm run db:reset` | Delete and rebuild it |
 | `npm run typecheck` | `tsc --noEmit` |
+| `npm run lint` | ESLint over the whole tree |
+| `npm run smoke` | Assert the auth gate, validation, roll-up and streaming against a running build |
 | `npm run auth:hash -- 'pw'` | Generate `HERMES_AUTH_PASSWORD` and `HERMES_SESSION_SECRET` |
 
 ## Stack

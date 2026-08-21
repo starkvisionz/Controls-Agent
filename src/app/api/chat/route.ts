@@ -5,7 +5,7 @@ import { AGENT_SYSTEM_PROMPT, buildProjectBriefing } from "@/lib/agent-context";
 import { localAnswer } from "@/lib/agent-local";
 import { getOrCreateConversation, getProject, listMessages } from "@/lib/queries";
 import { chatRequestSchema, toFieldErrors } from "@/lib/validation";
-import { clientKey, consume, LIMITS, tooManyRequests } from "@/lib/rate-limit";
+import { checkRate, tooManyRequests } from "@/lib/rate-limit";
 import type { Project } from "@/lib/types";
 
 export const runtime = "nodejs";
@@ -26,7 +26,7 @@ const MAX_BODY_BYTES = 16 * 1024;
 export async function POST(req: Request) {
   // This is the one route that can spend money at a provider, so it is limited
   // before anything else happens.
-  const gate = consume(clientKey(req, "chat"), LIMITS.chat);
+  const gate = checkRate(req, "chat");
   if (!gate.allowed) return tooManyRequests(gate.retryAfterSeconds);
 
   const declaredLength = Number(req.headers.get("content-length") ?? 0);

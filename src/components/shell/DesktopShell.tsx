@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { usePersistedFlag } from "@/lib/persisted-flag";
 import { Group, Panel, Separator, useDefaultLayout } from "react-resizable-panels";
 import { ProjectProvider, useProjects } from "./ProjectContext";
 import { Sidebar } from "./Sidebar";
@@ -9,7 +10,11 @@ import { TitleBar } from "./TitleBar";
 import { AgentPanel } from "@/components/chat/AgentPanel";
 import { LoadingPane, StateMessage } from "@/components/ui/Controls";
 
-const CHROME_KEY = "hermes.chrome";
+/** Persisted separately so each toggle is its own value, not a parsed blob. */
+const CHROME_KEYS = {
+  collapsed: "hermes.chrome.collapsed",
+  agentOpen: "hermes.chrome.agentOpen",
+} as const;
 
 /**
  * localStorage is not available while server-rendering, and it can throw
@@ -49,8 +54,8 @@ export function DesktopShell({
 
 function ShellFrame({ children, authEnforced }: { children: ReactNode; authEnforced: boolean }) {
   const { loading, error } = useProjects();
-  const [collapsed, setCollapsed] = useState(false);
-  const [agentOpen, setAgentOpen] = useState(true);
+  const [collapsed, setCollapsed] = usePersistedFlag(CHROME_KEYS.collapsed, false);
+  const [agentOpen, setAgentOpen] = usePersistedFlag(CHROME_KEYS.agentOpen, true);
   const [agentSource, setAgentSource] = useState<"claude" | "local" | null>(null);
 
   const { defaultLayout, onLayoutChanged } = useDefaultLayout({
@@ -60,43 +65,8 @@ function ShellFrame({ children, authEnforced }: { children: ReactNode; authEnfor
     onlySaveAfterUserInteractions: true,
   });
 
-  // Restore the saved chrome state after mount, so the markup the server
-  // rendered and the markup React hydrates are identical.
-  useEffect(() => {
-    const saved = safeStorage.getItem(CHROME_KEY);
-    if (!saved) return;
-    try {
-      const parsed = JSON.parse(saved) as { collapsed?: boolean; agentOpen?: boolean };
-      if (typeof parsed.collapsed === "boolean") setCollapsed(parsed.collapsed);
-      if (typeof parsed.agentOpen === "boolean") setAgentOpen(parsed.agentOpen);
-    } catch {
-      // Corrupt entry — ignore it and keep the defaults.
-    }
-  }, []);
-
-  const persistChrome = useCallback((next: { collapsed?: boolean; agentOpen?: boolean }) => {
-    let current = {};
-    try {
-      current = JSON.parse(safeStorage.getItem(CHROME_KEY) ?? "{}");
-    } catch {
-      current = {};
-    }
-    safeStorage.setItem(CHROME_KEY, JSON.stringify({ ...current, ...next }));
-  }, []);
-
-  const toggleSidebar = useCallback(() => {
-    setCollapsed((v) => {
-      persistChrome({ collapsed: !v });
-      return !v;
-    });
-  }, [persistChrome]);
-
-  const toggleAgent = useCallback(() => {
-    setAgentOpen((v) => {
-      persistChrome({ agentOpen: !v });
-      return !v;
-    });
-  }, [persistChrome]);
+  const toggleSidebar = useCallback(() => setCollapsed((v) => !v), [setCollapsed]);
+  const toggleAgent = useCallback(() => setAgentOpen((v) => !v), [setAgentOpen]);
 
   // Cmd/Ctrl-J toggles the agent panel, the way a desktop app would.
   useEffect(() => {

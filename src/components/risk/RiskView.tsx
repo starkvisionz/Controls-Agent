@@ -295,7 +295,12 @@ export function RiskView() {
         </div>
 
         {selected ? (
-          <RiskDetail risk={selected} onClose={() => setSelected(null)} onSaved={applyEdit} />
+          <RiskDetail
+            key={`${selected.id}:${selected.probability}:${selected.impact}:${selected.status}:${selected.mitigation_progress}:${selected.response_strategy}`}
+            risk={selected}
+            onClose={() => setSelected(null)}
+            onSaved={applyEdit}
+          />
         ) : null}
       </div>
     </div>

@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import {
   ClipboardCheck,
   FileText,
@@ -89,12 +89,17 @@ export function DocumentsView() {
 
   const dataDate = data?.project.data_date ?? "";
 
-  const isOverdue = (d: ProjectDocument) =>
-    Boolean(d.due_date) &&
-    d.due_date! < dataDate &&
-    d.review_status !== "approved" &&
-    d.status !== "as-built" &&
-    d.status !== "superseded";
+  // Referentially stable so the memos below can depend on it honestly rather
+  // than omitting it from their dependency lists.
+  const isOverdue = useCallback(
+    (d: ProjectDocument) =>
+      Boolean(d.due_date) &&
+      d.due_date! < dataDate &&
+      d.review_status !== "approved" &&
+      d.status !== "as-built" &&
+      d.status !== "superseded",
+    [dataDate]
+  );
 
   const disciplines = useMemo(() => {
     const set = new Set((data?.documents ?? []).map((d) => d.discipline));
@@ -134,7 +139,7 @@ export function DocumentsView() {
         if (overdueDelta !== 0) return overdueDelta;
         return (a.due_date ?? "9999").localeCompare(b.due_date ?? "9999");
       });
-  }, [data, scope, discipline, docType, query, dataDate]);
+  }, [data, scope, discipline, docType, query, isOverdue]);
 
   const stats = useMemo(() => {
     const all = data?.documents ?? [];
@@ -166,7 +171,7 @@ export function DocumentsView() {
         (s) => s.count > 0
       ),
     };
-  }, [data, dataDate]);
+  }, [data, dataDate, isOverdue]);
 
   if (loading) return <LoadingPane label="Loading document register" />;
   if (error || !data) {

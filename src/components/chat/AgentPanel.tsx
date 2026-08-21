@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ArrowUp, Bot, Eraser, Square, User } from "lucide-react";
 import { Markdown } from "./Markdown";
 import { IconButton } from "@/components/ui/Controls";
@@ -8,6 +8,9 @@ import { useProjects } from "@/components/shell/ProjectContext";
 import type { ChatMessage } from "@/lib/types";
 
 type Msg = Pick<ChatMessage, "id" | "role" | "content">;
+
+/** One shared empty array, so "no thread" keeps a stable identity too. */
+const EMPTY_THREAD: Msg[] = [];
 
 const SUGGESTIONS = [
   "Where does the project stand?",
@@ -25,31 +28,49 @@ export function AgentPanel({
   const { activeProject } = useProjects();
   const projectId = activeProject?.id ?? null;
 
-  const [messages, setMessages] = useState<Msg[]>([]);
+  const [loaded, setLoaded] = useState<{ projectId: string; messages: Msg[] } | null>(null);
   const [draft, setDraft] = useState("");
   const [streaming, setStreaming] = useState(false);
   const [partial, setPartial] = useState("");
   const [error, setError] = useState<string | null>(null);
 
+  // Only a thread fetched for the project currently in force is shown. Memoised
+  // so the identity is stable across renders — the scroll effect depends on it.
+  const messages = useMemo(
+    () => (loaded && loaded.projectId === projectId ? loaded.messages : EMPTY_THREAD),
+    [loaded, projectId]
+  );
+
+  const setMessages = useCallback(
+    (update: (prev: Msg[]) => Msg[]) => {
+      if (!projectId) return;
+      setLoaded((prev) => ({
+        projectId,
+        messages: update(prev && prev.projectId === projectId ? prev.messages : []),
+      }));
+    },
+    [projectId]
+  );
+
   const abortRef = useRef<AbortController | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
-  // Load the thread whenever the shell points at a different project.
+  // Load the thread whenever the shell points at a different project. State is
+  // written only from the fetch callbacks; the "no project selected" case is
+  // derived below rather than synchronised here, which would cost an extra
+  // render pass on every project switch.
   useEffect(() => {
-    if (!projectId) {
-      setMessages([]);
-      return;
-    }
+    if (!projectId) return;
     let cancelled = false;
 
     fetch(`/api/projects/${projectId}/messages`)
-      .then((res) => res.json() as Promise<{ messages: Msg[] }>)
+      .then((res) => res.json() as Promise<{ messages: Msg[]; conversationId: string }>)
       .then((json) => {
-        if (!cancelled) setMessages(json.messages ?? []);
+        if (!cancelled) setLoaded({ projectId, messages: json.messages ?? [] });
       })
       .catch(() => {
-        if (!cancelled) setMessages([]);
+        if (!cancelled) setLoaded({ projectId, messages: [] });
       });
 
     return () => {
@@ -145,7 +166,7 @@ export function AgentPanel({
         abortRef.current = null;
       }
     },
-    [projectId, streaming, onSourceChange]
+    [projectId, streaming, onSourceChange, setMessages]
   );
 
   const stop = () => abortRef.current?.abort();
@@ -153,7 +174,7 @@ export function AgentPanel({
   const clear = async () => {
     if (!projectId) return;
     await fetch(`/api/projects/${projectId}/messages`, { method: "DELETE" });
-    setMessages([]);
+    setMessages(() => []);
     setPartial("");
     setError(null);
   };

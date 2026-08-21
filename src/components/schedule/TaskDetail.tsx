@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { X } from "lucide-react";
 import { Badge, type Tone } from "@/components/ui/Badge";
 import { Meter } from "@/components/ui/Stat";
@@ -29,17 +29,13 @@ export function TaskDetail({
   onClose: () => void;
   onSaved: (task: Task) => void;
 }) {
+  // Initialised from the task and never re-synced: the caller remounts this
+  // component per activity (`key={task.id}`), which is React's own answer to
+  // resetting form state on a prop change and avoids a second render pass.
   const [percent, setPercent] = useState(task.percent_complete);
   const [status, setStatus] = useState<Task["status"]>(task.status);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
-
-  // Re-seed the form when the selection changes.
-  useEffect(() => {
-    setPercent(task.percent_complete);
-    setStatus(task.status);
-    setError(null);
-  }, [task.id, task.percent_complete, task.status]);
 
   const dirty = percent !== task.percent_complete || status !== task.status;
   const slip = daysBetween(task.baseline_finish, task.forecast_finish);

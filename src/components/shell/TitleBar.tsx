@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 import { Check, ChevronDown, LogOut, MessageSquareText, Radio } from "lucide-react";
 import { useProjects } from "./ProjectContext";
 import { index, money, shortDate } from "@/lib/format";
@@ -19,6 +20,7 @@ export function TitleBar({
   /** Hides the sign-out control when the app is running unauthenticated. */
   authEnforced: boolean;
 }) {
+  const router = useRouter();
   const { projects, activeProject, setActiveProjectId } = useProjects();
   const [open, setOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -150,7 +152,10 @@ export function TitleBar({
           <button
             onClick={async () => {
               await fetch("/api/auth/logout", { method: "POST" });
-              window.location.href = "/login";
+              router.replace("/login");
+              // Drops the cached RSC payload so no project data survives the
+              // sign-out in the client router cache.
+              router.refresh();
             }}
             title="Sign out"
             aria-label="Sign out"

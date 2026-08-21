@@ -4,8 +4,8 @@
  * Scoped to what a single-instance deployment needs: stop one caller from
  * grinding the database, filling the conversation table, or spending the
  * account's Claude tokens. It is per-process and resets on restart — adequate
- * for one Node instance behind one address, and honestly not adequate for a
- * horizontally scaled deployment, which would need a shared store.
+ * for one Node instance, and honestly not adequate for a horizontally scaled
+ * deployment, which would need a shared store.
  */
 
 type Bucket = { tokens: number; updatedAt: number };
@@ -26,6 +26,22 @@ export const LIMITS = {
   /** Login: slow enough that guessing over the network is not viable. */
   login: { capacity: 5, refillPerSecond: 1 / 60 },
 } satisfies Record<string, Limit>;
+
+/**
+ * A second ceiling covering everyone at once.
+ *
+ * The per-client limit assumes client identity means something. Even when it
+ * does, a spread of addresses would each get a full allowance, so these bound
+ * the total: whatever the origin of the traffic, the instance will not exceed
+ * this rate.
+ */
+export const GLOBAL_LIMITS = {
+  chat: { capacity: 40, refillPerSecond: 1 / 3 },
+  write: { capacity: 240, refillPerSecond: 6 },
+  login: { capacity: 25, refillPerSecond: 1 / 10 },
+} satisfies Record<keyof typeof LIMITS, Limit>;
+
+export type Scope = keyof typeof LIMITS;
 
 export type RateResult = { allowed: true } | { allowed: false; retryAfterSeconds: number };
 
@@ -50,27 +66,88 @@ export function consume(key: string, limit: Limit, now = Date.now()): RateResult
   return { allowed: true };
 }
 
+// ---------------------------------------------------------------------------
+// Client identity
+// ---------------------------------------------------------------------------
+
 /**
- * Best-effort client identity. Behind a reverse proxy this is the forwarded
- * address; direct, it falls back to a single shared bucket, which is the safe
- * direction to be wrong in (it throttles more, not less).
+ * How many reverse proxies sit in front of this instance, from
+ * `HERMES_TRUSTED_PROXIES`. Zero — the default — means the app is reached
+ * directly and no forwarding header may be believed.
  */
-export function clientKey(req: Request, scope: string): string {
-  const forwarded = req.headers.get("x-forwarded-for")?.split(",")[0]?.trim();
-  const real = req.headers.get("x-real-ip")?.trim();
-  return `${scope}:${forwarded || real || "unknown"}`;
+function trustedProxyCount(): number {
+  const raw = Number(process.env.HERMES_TRUSTED_PROXIES ?? 0);
+  return Number.isInteger(raw) && raw > 0 ? raw : 0;
+}
+
+/**
+ * Resolves the address to rate-limit against.
+ *
+ * `X-Forwarded-For` is a list that each proxy appends to, and anything the
+ * client sent arrives as the *leftmost* entries. Keying on the left of that
+ * list is therefore keying on a value the caller chooses: send a different one
+ * each request and every request gets a fresh bucket, which defeats the limit
+ * entirely rather than merely weakening it.
+ *
+ * So the header is believed only when the operator has declared how many
+ * proxies are in front, and then only the entry the innermost trusted proxy
+ * observed is used. With N trusted hops the rightmost N entries were written by
+ * infrastructure the operator controls; the one before them is the address that
+ * infrastructure saw, and everything further left is caller-supplied noise.
+ *
+ * Returns null when no trustworthy address is available, which the caller must
+ * treat as "share one bucket" rather than "no limit".
+ */
+export function clientAddress(req: Request): string | null {
+  const hops = trustedProxyCount();
+  if (hops === 0) return null;
+
+  const chain = (req.headers.get("x-forwarded-for") ?? "")
+    .split(",")
+    .map((part) => part.trim())
+    .filter(Boolean);
+
+  if (chain.length === 0) {
+    // A single-hop proxy that overwrites rather than appends puts the address
+    // in X-Real-IP instead.
+    return hops === 1 ? (req.headers.get("x-real-ip")?.trim() || null) : null;
+  }
+
+  // Clamped so a chain shorter than the declared hop count cannot walk off the
+  // front of the list into caller-supplied territory.
+  const index = Math.max(0, chain.length - hops);
+  return chain[index] ?? null;
+}
+
+/**
+ * Bucket key for a request.
+ *
+ * With no trustworthy address, every caller shares one bucket for the scope.
+ * That throttles legitimate users together, which is the safe direction to be
+ * wrong in — the alternative is an unenforced limit.
+ */
+export function clientKey(req: Request, scope: Scope): string {
+  return `${scope}:${clientAddress(req) ?? "shared"}`;
+}
+
+/**
+ * The check every limited route runs: the caller's own allowance and the
+ * instance-wide ceiling, both of which must have room.
+ */
+export function checkRate(req: Request, scope: Scope, now = Date.now()): RateResult {
+  const perClient = consume(clientKey(req, scope), LIMITS[scope], now);
+  if (!perClient.allowed) return perClient;
+
+  return consume(`global:${scope}`, GLOBAL_LIMITS[scope], now);
 }
 
 /** 429 with the headers a well-behaved client will honour. */
 export function tooManyRequests(retryAfterSeconds: number): Response {
-  return new Response(
-    JSON.stringify({ error: "Too many requests", retryAfterSeconds }),
-    {
-      status: 429,
-      headers: {
-        "Content-Type": "application/json",
-        "Retry-After": String(retryAfterSeconds),
-      },
-    }
-  );
+  return new Response(JSON.stringify({ error: "Too many requests", retryAfterSeconds }), {
+    status: 429,
+    headers: {
+      "Content-Type": "application/json",
+      "Retry-After": String(retryAfterSeconds),
+    },
+  });
 }

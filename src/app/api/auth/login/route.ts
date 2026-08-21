@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { authMode, issueSession, sessionCookieOptions, SESSION_COOKIE, verifyPassword } from "@/lib/auth";
-import { clientKey, consume, LIMITS, tooManyRequests } from "@/lib/rate-limit";
+import { checkRate, tooManyRequests } from "@/lib/rate-limit";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -8,7 +8,7 @@ export const dynamic = "force-dynamic";
 export async function POST(req: Request) {
   // Throttle before touching the password so guessing is bounded by the clock
   // rather than by network speed.
-  const gate = consume(clientKey(req, "login"), LIMITS.login);
+  const gate = checkRate(req, "login");
   if (!gate.allowed) return tooManyRequests(gate.retryAfterSeconds);
 
   const mode = authMode();

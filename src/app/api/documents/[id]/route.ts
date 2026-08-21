@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { clientKey, consume, LIMITS, tooManyRequests } from "@/lib/rate-limit";
+import { checkRate, tooManyRequests } from "@/lib/rate-limit";
 import { getDb, one } from "@/lib/db";
 import { documentPatchSchema, toFieldErrors } from "@/lib/validation";
 import type { ProjectDocument } from "@/lib/types";
@@ -17,7 +17,7 @@ export async function GET(_req: Request, ctx: { params: Promise<{ id: string }> 
 export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }> }) {
   const { id } = await ctx.params;
 
-  const gate = consume(clientKey(req, "write"), LIMITS.write);
+  const gate = checkRate(req, "write");
   if (!gate.allowed) return tooManyRequests(gate.retryAfterSeconds);
   const existing = one<ProjectDocument>(`SELECT * FROM documents WHERE id = ?`, [id]);
   if (!existing) return NextResponse.json({ error: "Document not found" }, { status: 404 });

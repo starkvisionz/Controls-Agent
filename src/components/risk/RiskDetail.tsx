@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { X } from "lucide-react";
 import { Badge, type Tone } from "@/components/ui/Badge";
 import { Meter } from "@/components/ui/Stat";
@@ -27,6 +27,9 @@ export function RiskDetail({
   onClose: () => void;
   onSaved: (risk: Risk) => void;
 }) {
+  // Initialised from the risk and never re-synced: the caller remounts this
+  // component per risk (`key={risk.id}`), which is React's own answer to
+  // resetting form state on a prop change and avoids a second render pass.
   const [status, setStatus] = useState(risk.status);
   const [probability, setProbability] = useState(risk.probability);
   const [impact, setImpact] = useState(risk.impact);
@@ -34,15 +37,6 @@ export function RiskDetail({
   const [strategy, setStrategy] = useState(risk.response_strategy);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    setStatus(risk.status);
-    setProbability(risk.probability);
-    setImpact(risk.impact);
-    setProgress(risk.mitigation_progress);
-    setStrategy(risk.response_strategy);
-    setError(null);
-  }, [risk]);
 
   const dirty =
     status !== risk.status ||
