@@ -4,11 +4,14 @@ import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { usePersistedFlag } from "@/lib/persisted-flag";
 import { Group, Panel, Separator, useDefaultLayout } from "react-resizable-panels";
 import { ProjectProvider, useProjects } from "./ProjectContext";
+import { SessionProvider } from "./SessionContext";
 import { Sidebar } from "./Sidebar";
 import { StatusBar } from "./StatusBar";
 import { TitleBar } from "./TitleBar";
 import { AgentPanel } from "@/components/chat/AgentPanel";
 import { LoadingPane, StateMessage } from "@/components/ui/Controls";
+import { PasswordGate } from "./PasswordGate";
+import type { Principal } from "@/lib/rbac";
 
 /** Persisted separately so each toggle is its own value, not a parsed blob. */
 const CHROME_KEYS = {
@@ -40,19 +43,35 @@ const safeStorage = {
 
 export function DesktopShell({
   children,
+  principal,
   authEnforced,
+  mustChangePassword,
 }: {
   children: ReactNode;
+  principal: Principal;
   authEnforced: boolean;
+  mustChangePassword: boolean;
 }) {
   return (
-    <ProjectProvider>
-      <ShellFrame authEnforced={authEnforced}>{children}</ShellFrame>
-    </ProjectProvider>
+    <SessionProvider
+      principal={principal}
+      enforced={authEnforced}
+      mustChangePassword={mustChangePassword}
+    >
+      {/* A starting password somebody else chose is replaced before the
+          registers are on screen, not after. */}
+      {mustChangePassword ? (
+        <PasswordGate name={principal.name} />
+      ) : (
+        <ProjectProvider>
+          <ShellFrame>{children}</ShellFrame>
+        </ProjectProvider>
+      )}
+    </SessionProvider>
   );
 }
 
-function ShellFrame({ children, authEnforced }: { children: ReactNode; authEnforced: boolean }) {
+function ShellFrame({ children }: { children: ReactNode }) {
   const { loading, error } = useProjects();
   const [collapsed, setCollapsed] = usePersistedFlag(CHROME_KEYS.collapsed, false);
   const [agentOpen, setAgentOpen] = usePersistedFlag(CHROME_KEYS.agentOpen, true);
@@ -82,7 +101,7 @@ function ShellFrame({ children, authEnforced }: { children: ReactNode; authEnfor
 
   return (
     <div className="flex h-dvh flex-col overflow-hidden bg-canvas">
-      <TitleBar agentOpen={agentOpen} onToggleAgent={toggleAgent} authEnforced={authEnforced} />
+      <TitleBar agentOpen={agentOpen} onToggleAgent={toggleAgent} />
 
       <div className="flex min-h-0 flex-1">
         <Sidebar collapsed={collapsed} onToggle={toggleSidebar} badges={{}} />

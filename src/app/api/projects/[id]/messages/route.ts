@@ -1,12 +1,19 @@
 import { NextResponse } from "next/server";
+import { requirePermission } from "@/lib/guard";
 import { run } from "@/lib/db";
 import { getOrCreateConversation, getProject, listMessages } from "@/lib/queries";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-export async function GET(_req: Request, ctx: { params: Promise<{ id: string }> }) {
+export async function GET(req: Request, ctx: { params: Promise<{ id: string }> }) {
   const { id } = await ctx.params;
+
+  // The transcript quotes the project's figures back, so reading it needs the
+  // same permission as asking in the first place.
+  const guard = requirePermission(req, "agent:use", id);
+  if (!guard.ok) return guard.response;
+
   const project = getProject(id);
   if (!project) return NextResponse.json({ error: "Project not found" }, { status: 404 });
 
@@ -15,8 +22,12 @@ export async function GET(_req: Request, ctx: { params: Promise<{ id: string }> 
 }
 
 /** Clears the thread — the panel's "new conversation" action. */
-export async function DELETE(_req: Request, ctx: { params: Promise<{ id: string }> }) {
+export async function DELETE(req: Request, ctx: { params: Promise<{ id: string }> }) {
   const { id } = await ctx.params;
+
+  const guard = requirePermission(req, "agent:use", id);
+  if (!guard.ok) return guard.response;
+
   const project = getProject(id);
   if (!project) return NextResponse.json({ error: "Project not found" }, { status: 404 });
 

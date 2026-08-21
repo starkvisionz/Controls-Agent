@@ -1,9 +1,11 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { useRouter } from "next/navigation";
-import { Check, ChevronDown, LogOut, MessageSquareText, Radio } from "lucide-react";
+import { Check, ChevronDown, Eye, MessageSquareText, Radio } from "lucide-react";
 import { useProjects } from "./ProjectContext";
+import { AccountMenu } from "./AccountMenu";
+import { useSession } from "./SessionContext";
+import { ROLE_LABELS } from "@/lib/rbac";
 import { index, money, shortDate } from "@/lib/format";
 
 /**
@@ -13,15 +15,12 @@ import { index, money, shortDate } from "@/lib/format";
 export function TitleBar({
   agentOpen,
   onToggleAgent,
-  authEnforced,
 }: {
   agentOpen: boolean;
   onToggleAgent: () => void;
-  /** Hides the sign-out control when the app is running unauthenticated. */
-  authEnforced: boolean;
 }) {
-  const router = useRouter();
   const { projects, activeProject, setActiveProjectId } = useProjects();
+  const { principal } = useSession();
   const [open, setOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
 
@@ -107,6 +106,12 @@ export function TitleBar({
                     </div>
                     <div className="truncate text-[10px] text-ink-faint">
                       {p.client} · {p.phase} · {money(p.budget_at_completion, { compact: true })}
+                      {/* Named where the project is chosen, so a role that
+                          differs from the account's own is not a surprise
+                          discovered by clicking a disabled control. */}
+                      {p.role && p.role !== principal.role ? (
+                        <span className="ml-1 text-accent-hi">· {ROLE_LABELS[p.role]}</span>
+                      ) : null}
                     </div>
                   </div>
                   <div className="shrink-0 text-right font-mono text-[10px] tabular">
@@ -134,6 +139,18 @@ export function TitleBar({
         </div>
       ) : null}
 
+      {/* Said once, in the chrome, rather than left to be inferred from a row
+          of disabled inputs further in. */}
+      {activeProject?.role === "viewer" ? (
+        <div
+          title="This account can read this project but not change it"
+          className="flex items-center gap-1.5 rounded-sm border border-line bg-raised px-1.5 py-0.5 text-[10px] text-ink-mute"
+        >
+          <Eye className="h-3 w-3 text-ink-faint" />
+          Read only
+        </div>
+      ) : null}
+
       <div className="ml-auto flex items-center gap-1.5">
         <button
           onClick={onToggleAgent}
@@ -148,22 +165,7 @@ export function TitleBar({
           Agent
         </button>
 
-        {authEnforced ? (
-          <button
-            onClick={async () => {
-              await fetch("/api/auth/logout", { method: "POST" });
-              router.replace("/login");
-              // Drops the cached RSC payload so no project data survives the
-              // sign-out in the client router cache.
-              router.refresh();
-            }}
-            title="Sign out"
-            aria-label="Sign out"
-            className="flex h-6 w-6 items-center justify-center rounded-sm border border-line bg-raised text-ink-mute transition-colors hover:text-ink-dim"
-          >
-            <LogOut className="h-3 w-3" />
-          </button>
-        ) : null}
+        <AccountMenu />
       </div>
     </header>
   );

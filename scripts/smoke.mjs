@@ -7,20 +7,27 @@
  *
  *   - the roll-up: a schedule edit must move project EVM
  *   - the auth gate: no page, read or write without a session
+ *   - authorisation: each role may do exactly what its permissions say, and a
+ *     scoped account cannot see or touch a project it was not granted
+ *   - revocation: changing an account ends the sessions it already had
  *   - validation: out-of-range and unknown fields refused
  *   - rate limiting: not defeatable with a forged X-Forwarded-For
  *   - streaming: the agent endpoint still streams SSE
+ *
+ * It runs against the seeded demo accounts, so `npm run db:seed` must have run.
  *
  * Usage: node scripts/smoke.mjs [baseUrl]
  */
 
 const BASE = process.argv[2] ?? "http://localhost:3000";
-const PASSWORD = process.env.STARKVISIONZ_AUTH_PASSWORD;
+const PASSWORD = process.env.STARKVISIONZ_DEMO_PASSWORD?.trim() || "starkvisionz-demo";
 
-if (!PASSWORD || PASSWORD.startsWith("scrypt$")) {
-  console.error("smoke: set STARKVISIONZ_AUTH_PASSWORD to the plaintext password for this run");
-  process.exit(1);
-}
+const ACCOUNTS = {
+  admin: "admin@starkvisionz.example",
+  lead: "lead@starkvisionz.example",
+  planner: "planner@starkvisionz.example",
+  viewer: "viewer@starkvisionz.example",
+};
 
 let passed = 0;
 const failures = [];
@@ -70,25 +77,65 @@ check("login page is reachable", (await get("/login")).status === 200);
 const wrong = await get("/api/auth/login", {
   method: "POST",
   headers: json,
-  body: JSON.stringify({ password: `${PASSWORD}-wrong` }),
+  body: JSON.stringify({ email: ACCOUNTS.lead, password: `${PASSWORD}-wrong` }),
 });
 check("wrong password refused", wrong.status === 401);
 
-const login = await get("/api/auth/login", {
+const unknown = await get("/api/auth/login", {
   method: "POST",
   headers: json,
-  body: JSON.stringify({ password: PASSWORD }),
+  body: JSON.stringify({ email: "nobody@starkvisionz.example", password: PASSWORD }),
 });
-check("correct password accepted", login.status === 200);
+check("unknown address refused", unknown.status === 401);
+// Account enumeration: the two failures above must be indistinguishable.
+check(
+  "unknown address and wrong password answer alike",
+  (await wrong.clone().text()) === (await unknown.clone().text())
+);
 
-const cookie = (login.headers.get("set-cookie") ?? "").split(";")[0];
-check("session cookie issued", cookie.startsWith("starkvisionz_session="), cookie.split("=")[0]);
+/** Signs in and returns the session cookie, or null. */
+async function signIn(email) {
+  const res = await get("/api/auth/login", {
+    method: "POST",
+    headers: json,
+    body: JSON.stringify({ email, password: PASSWORD }),
+  });
+  if (res.status !== 200) return null;
+  return (res.headers.get("set-cookie") ?? "").split(";")[0];
+}
+
+const cookie = await signIn(ACCOUNTS.admin);
+check("correct password accepted", cookie !== null);
+check("session cookie issued", Boolean(cookie?.startsWith("starkvisionz_session=")));
+
+if (!cookie) {
+  // Everything below needs a session. Say why rather than failing forty
+  // assertions with the same cause — the usual reason is a re-run against a
+  // server whose login bucket the last run drained on purpose.
+  console.error(
+    "\nsmoke: could not sign in as " +
+      ACCOUNTS.admin +
+      ".\n  - has `npm run db:seed` run, creating the demo accounts?\n" +
+      "  - is this a fresh server? the rate-limit assertion below drains the\n" +
+      "    login bucket by design, so a second run needs a restart.\n"
+  );
+  process.exit(1);
+}
 
 const authed = { ...json, cookie };
 check("read API allowed with session", (await get("/api/projects", { headers: authed })).status === 200);
 check(
   "forged cookie refused",
-  (await get("/api/projects", { headers: { cookie: "starkvisionz_session=1.9999999999.forged" } })).status === 401
+  (
+    await get("/api/projects", {
+      headers: { cookie: "starkvisionz_session=v2.usr-forged.1.1.9999999999.forged" },
+    })
+  ).status === 401
+);
+check(
+  "a v1 cookie is not accepted as a v2 one",
+  (await get("/api/projects", { headers: { cookie: "starkvisionz_session=1.9999999999.forged" } }))
+    .status === 401
 );
 
 // ---------------------------------------------------------------------------
@@ -122,6 +169,162 @@ check(
 check("SPI moved", after.spi !== before.spi, `${before.spi.toFixed(4)} -> ${after.spi.toFixed(4)}`);
 check("CPI moved", after.cpi !== before.cpi, `${before.cpi.toFixed(4)} -> ${after.cpi.toFixed(4)}`);
 check("forecast at completion moved", after.eac !== before.eac);
+
+
+// ---------------------------------------------------------------------------
+// Authorisation
+//
+// The roles are only real if each one is refused what it does not hold. These
+// walk the matrix from both sides: what a role may do, and what it may not.
+// ---------------------------------------------------------------------------
+console.log("\nrole-based access");
+
+const asLead = { ...json, cookie: await signIn(ACCOUNTS.lead) };
+const asPlanner = { ...json, cookie: await signIn(ACCOUNTS.planner) };
+const asViewer = { ...json, cookie: await signIn(ACCOUNTS.viewer) };
+
+check("every demo account can sign in", [asLead, asPlanner, asViewer].every((h) => Boolean(h.cookie)));
+
+const patchTask = (headers, taskId = target.id) =>
+  get(`/api/tasks/${taskId}`, {
+    method: "PATCH",
+    headers,
+    body: JSON.stringify({ percent_complete: 41 }),
+  });
+
+const patchRisk = (headers, riskId = "prj-gc4410-risk-16") =>
+  get(`/api/risks/${riskId}`, {
+    method: "PATCH",
+    headers,
+    body: JSON.stringify({ mitigation_progress: 40 }),
+  });
+
+// What each role may do.
+check("controls lead may edit the schedule", (await patchTask(asLead)).status === 200);
+check("controls lead may edit a risk", (await patchRisk(asLead)).status === 200);
+check("planner may edit the schedule", (await patchTask(asPlanner)).status === 200);
+
+// What each role may not. A refusal is 403 — the account can see the project,
+// so pretending it is absent would be a lie it can disprove by reading it.
+const plannerRisk = await patchRisk(asPlanner);
+check("planner may NOT edit a risk", plannerRisk.status === 403, `status ${plannerRisk.status}`);
+
+const viewerTask = await patchTask(asViewer);
+check("viewer may NOT edit the schedule", viewerTask.status === 403, `status ${viewerTask.status}`);
+
+const viewerRisk = await patchRisk(asViewer);
+check("viewer may NOT edit a risk", viewerRisk.status === 403, `status ${viewerRisk.status}`);
+
+check("viewer may still read", (await get("/api/projects/prj-gc4410", { headers: asViewer })).status === 200);
+check("viewer may still ask the agent", (await get("/api/projects/prj-gc4410/messages", { headers: asViewer })).status === 200);
+
+// Account management is instance-wide and admin-only.
+check("admin may list accounts", (await get("/api/users", { headers: authed })).status === 200);
+for (const [label, headers] of [["controls lead", asLead], ["planner", asPlanner], ["viewer", asViewer]]) {
+  const res = await get("/api/users", { headers });
+  check(`${label} may NOT list accounts`, res.status === 403, `status ${res.status}`);
+}
+
+// ---------------------------------------------------------------------------
+// Project scoping
+//
+// The demo viewer is granted GC-4410 only. Everything about NV-2208 must be
+// unreachable — and unreachable as "not found", because a project's existence
+// is itself commercially interesting.
+// ---------------------------------------------------------------------------
+console.log("\nproject scoping");
+
+const viewerPortfolio = await (await get("/api/projects", { headers: asViewer })).json();
+check(
+  "a scoped account sees only its projects",
+  viewerPortfolio.projects.length === 1 && viewerPortfolio.projects[0].id === "prj-gc4410",
+  viewerPortfolio.projects.map((p) => p.code).join(", ")
+);
+check(
+  "an unscoped account sees the whole portfolio",
+  (await (await get("/api/projects", { headers: asLead })).json()).projects.length === 3
+);
+
+const outOfScope = await get("/api/projects/prj-nv2208", { headers: asViewer });
+check("out-of-scope project reads as absent", outOfScope.status === 404, `status ${outOfScope.status}`);
+check(
+  "out-of-scope schedule reads as absent",
+  (await get("/api/projects/prj-nv2208/schedule", { headers: asViewer })).status === 404
+);
+check(
+  "out-of-scope agent turn refused",
+  (
+    await get("/api/chat", {
+      method: "POST",
+      headers: asViewer,
+      body: JSON.stringify({ projectId: "prj-nv2208", message: "Where does the project stand?" }),
+    })
+  ).status === 404
+);
+
+// A row is authorised against the project it belongs to, not the URL it was
+// reached by — otherwise scoping is bypassed by knowing an id.
+const nvSchedule = await (await get("/api/projects/prj-nv2208/schedule", { headers: asLead })).json();
+const nvTask = nvSchedule.tasks.find((t) => !t.is_milestone);
+check("found an out-of-scope activity to try", Boolean(nvTask), nvTask?.code);
+check(
+  "a row in an out-of-scope project reads as absent",
+  (await get(`/api/tasks/${nvTask.id}`, { headers: asViewer })).status === 404
+);
+check(
+  "writing a row in an out-of-scope project reads as absent",
+  (await patchTask(asViewer, nvTask.id)).status === 404
+);
+
+// ---------------------------------------------------------------------------
+// Revocation
+//
+// Sessions are signed bearers with no server-side store, so the claim that
+// changing an account ends its sessions is exactly the claim worth testing.
+// ---------------------------------------------------------------------------
+console.log("\nrevocation");
+
+const plannerId = (await (await get("/api/users", { headers: authed })).json()).users.find(
+  (u) => u.email === ACCOUNTS.planner
+).id;
+
+check("planner's session works before the change", (await get("/api/projects", { headers: asPlanner })).status === 200);
+
+const demote = await get(`/api/users/${plannerId}`, {
+  method: "PATCH",
+  headers: authed,
+  body: JSON.stringify({ role: "viewer" }),
+});
+check("role change accepted", demote.status === 200, `status ${demote.status}`);
+check(
+  "the role change ended the session it was holding",
+  (await get("/api/projects", { headers: asPlanner })).status === 401
+);
+
+const asPlannerAgain = { ...json, cookie: await signIn(ACCOUNTS.planner) };
+check(
+  "signing in again reflects the new role",
+  (await patchTask(asPlannerAgain)).status === 403
+);
+
+// Put it back, so a re-run starts where this one did.
+await get(`/api/users/${plannerId}`, {
+  method: "PATCH",
+  headers: authed,
+  body: JSON.stringify({ role: "planner" }),
+});
+
+// The last administrator cannot be removed: an instance with nobody who can
+// fix it is not a state an administrator should be able to reach by accident.
+const adminId = (await (await get("/api/users", { headers: authed })).json()).users.find(
+  (u) => u.email === ACCOUNTS.admin
+).id;
+const selfDemote = await get(`/api/users/${adminId}`, {
+  method: "PATCH",
+  headers: authed,
+  body: JSON.stringify({ role: "viewer" }),
+});
+check("an administrator cannot demote itself", selfDemote.status === 422, `status ${selfDemote.status}`);
 
 // ---------------------------------------------------------------------------
 // Validation
@@ -159,31 +362,14 @@ const long = await get("/api/chat", {
 check("oversized agent message refused", long.status === 422, `status ${long.status}`);
 
 // ---------------------------------------------------------------------------
-// Rate limiting
-// ---------------------------------------------------------------------------
-console.log("\nrate limiting");
-
-// The regression this guards: keying on a caller-supplied header let anyone
-// mint a fresh bucket per request and guess passwords without limit.
-const codes = [];
-for (let i = 0; i < 10; i++) {
-  const res = await get("/api/auth/login", {
-    method: "POST",
-    headers: { ...json, "X-Forwarded-For": `10.9.9.${i}` },
-    body: JSON.stringify({ password: `${PASSWORD}-wrong` }),
-  });
-  codes.push(res.status);
-}
-check(
-  "forged X-Forwarded-For does not mint fresh buckets",
-  codes.includes(429),
-  codes.join(" ")
-);
-
-// ---------------------------------------------------------------------------
 // Streaming
 // ---------------------------------------------------------------------------
 console.log("\nagent streaming");
+
+// Re-read rather than reusing the roll-up section's figures: the role checks
+// above wrote to the same activity, so `after` is no longer current — and the
+// point of this assertion is that the agent reads the database now.
+const current = await metrics();
 
 const stream = await fetch(`${BASE}/api/chat`, {
   method: "POST",
@@ -208,8 +394,33 @@ check("stream completed", body.includes("event: done"));
 // The agent must be reading the post-edit database, not a cached briefing.
 check(
   "agent quotes the current SPI",
-  body.includes(after.spi.toFixed(3)),
-  `expected ${after.spi.toFixed(3)}`
+  body.includes(current.spi.toFixed(3)),
+  `expected ${current.spi.toFixed(3)}`
+);
+
+// ---------------------------------------------------------------------------
+// Rate limiting
+//
+// Last, because proving the login limit works means exhausting it, and nothing
+// after this point could sign in.
+// ---------------------------------------------------------------------------
+console.log("\nrate limiting");
+
+// The regression this guards: keying on a caller-supplied header let anyone
+// mint a fresh bucket per request and guess passwords without limit.
+const codes = [];
+for (let i = 0; i < 10; i++) {
+  const res = await get("/api/auth/login", {
+    method: "POST",
+    headers: { ...json, "X-Forwarded-For": `10.9.9.${i}` },
+    body: JSON.stringify({ email: ACCOUNTS.lead, password: `${PASSWORD}-wrong` }),
+  });
+  codes.push(res.status);
+}
+check(
+  "forged X-Forwarded-For does not mint fresh buckets",
+  codes.includes(429),
+  codes.join(" ")
 );
 
 // ---------------------------------------------------------------------------

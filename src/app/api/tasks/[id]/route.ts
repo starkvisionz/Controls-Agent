@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { requirePermission, requireProjectRead } from "@/lib/guard";
 import { checkRate, tooManyRequests } from "@/lib/rate-limit";
 import { getDb, one } from "@/lib/db";
 import { recalculateProject } from "@/lib/rollup";
@@ -8,21 +9,30 @@ import type { Task } from "@/lib/types";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-export async function GET(_req: Request, ctx: { params: Promise<{ id: string }> }) {
+export async function GET(req: Request, ctx: { params: Promise<{ id: string }> }) {
   const { id } = await ctx.params;
   const task = one<Task>(`SELECT * FROM tasks WHERE id = ?`, [id]);
   if (!task) return NextResponse.json({ error: "Task not found" }, { status: 404 });
+
+  // Authorised against the project the row belongs to. Reading a row by id
+  // would otherwise sidestep project scoping entirely.
+  const guard = requireProjectRead(req, task.project_id);
+  if (!guard.ok) return guard.response;
+
   return NextResponse.json({ task });
 }
 
 export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }> }) {
   const { id } = await ctx.params;
 
-  const gate = checkRate(req, "write");
-  if (!gate.allowed) return tooManyRequests(gate.retryAfterSeconds);
-
   const existing = one<Task>(`SELECT * FROM tasks WHERE id = ?`, [id]);
   if (!existing) return NextResponse.json({ error: "Task not found" }, { status: 404 });
+
+  const guard = requirePermission(req, "schedule:write", existing.project_id);
+  if (!guard.ok) return guard.response;
+
+  const gate = checkRate(req, "write", { identity: guard.principal.id });
+  if (!gate.allowed) return tooManyRequests(gate.retryAfterSeconds);
 
   let raw: unknown;
   try {

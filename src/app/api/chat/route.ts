@@ -6,6 +6,7 @@ import { localAnswer } from "@/lib/agent-local";
 import { getOrCreateConversation, getProject, listMessages } from "@/lib/queries";
 import { chatRequestSchema, toFieldErrors } from "@/lib/validation";
 import { checkRate, tooManyRequests } from "@/lib/rate-limit";
+import { requirePermission, requireUser } from "@/lib/guard";
 import type { Project } from "@/lib/types";
 
 export const runtime = "nodejs";
@@ -24,9 +25,12 @@ function sse(event: string, data: unknown): Uint8Array {
 const MAX_BODY_BYTES = 16 * 1024;
 
 export async function POST(req: Request) {
-  // This is the one route that can spend money at a provider, so it is limited
-  // before anything else happens.
-  const gate = checkRate(req, "chat");
+  // Identify the caller first: this is the one route that can spend money at a
+  // provider, and an account is a far better thing to limit than an address.
+  const caller = requireUser(req);
+  if (!caller.ok) return caller.response;
+
+  const gate = checkRate(req, "chat", { identity: caller.principal.id });
   if (!gate.allowed) return tooManyRequests(gate.retryAfterSeconds);
 
   const declaredLength = Number(req.headers.get("content-length") ?? 0);
@@ -49,6 +53,11 @@ export async function POST(req: Request) {
     );
   }
   const { projectId, message: question } = parsed.data;
+
+  // The briefing summarises the whole project, so asking about one is a read of
+  // it — checked against the project named in the body, not the URL.
+  const guard = requirePermission(req, "agent:use", projectId);
+  if (!guard.ok) return guard.response;
 
   const project = getProject(projectId);
   if (!project) {

@@ -11,7 +11,7 @@
     "typecheck": "tsc --noEmit",
     "db:seed": "node scripts/seed.mjs",
     "db:reset": "rm -f data/starkvisionz.db && npm run db:seed",
-    "auth:hash": "node scripts/hash-password.mjs",
+    "user": "node scripts/user.mjs",
     "smoke": "node scripts/smoke.mjs"
   },
   "dependencies": {

@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { PROJECT_ROLES, ROLES } from "@/lib/rbac";
 
 /**
  * The write contract, shared by the UI and the API.
@@ -163,6 +164,97 @@ export const chatRequestSchema = z
   .strict();
 
 export type ChatRequest = z.infer<typeof chatRequestSchema>;
+
+// ---------------------------------------------------------------------------
+// Accounts
+// ---------------------------------------------------------------------------
+
+/**
+ * Password floor.
+ *
+ * Length is the only rule. Composition rules ("one capital, one symbol") shrink
+ * the search space people actually use and push them towards writing the result
+ * down; a length floor does not.
+ */
+export const MIN_PASSWORD_CHARS = 12;
+/** Bounds the work an attacker can make scrypt do on an unauthenticated route. */
+export const MAX_PASSWORD_CHARS = 256;
+
+export const passwordSchema = z
+  .string()
+  .min(MIN_PASSWORD_CHARS, `must be at least ${MIN_PASSWORD_CHARS} characters`)
+  .max(MAX_PASSWORD_CHARS, `cannot exceed ${MAX_PASSWORD_CHARS} characters`);
+
+export const emailSchema = z
+  .string()
+  .trim()
+  .min(3, "is required")
+  .max(254, "is too long")
+  .refine((v) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v), "must look like an email address");
+
+export const roleSchema = z.enum(ROLES, { message: "is not a role" });
+
+/**
+ * One project grant. `role` may be omitted to mean "this account's global role
+ * on this project"; `admin` is refused because account management cannot be
+ * scoped to a single project.
+ */
+export const projectGrantSchema = z
+  .object({
+    project_id: z.string().trim().min(1).max(120),
+    role: z.enum(PROJECT_ROLES, { message: "cannot be granted per project" }).nullish(),
+  })
+  .strict()
+  .transform((g) => ({ project_id: g.project_id, role: g.role ?? null }));
+
+/** An empty list is meaningful: portfolio-wide access at the account's role. */
+export const projectGrantsSchema = z.array(projectGrantSchema).max(500);
+
+export const loginSchema = z
+  .object({
+    email: emailSchema,
+    // Not `passwordSchema`: an existing password predating a raised floor must
+    // still be able to sign in, and telling an unauthenticated caller that
+    // their guess was too short is a free hint.
+    password: z.string().min(1, "is required").max(MAX_PASSWORD_CHARS),
+  })
+  .strict();
+
+export const createUserSchema = z
+  .object({
+    email: emailSchema,
+    name: z.string().trim().min(1, "is required").max(120),
+    password: passwordSchema,
+    role: roleSchema,
+    projects: projectGrantsSchema.optional(),
+  })
+  .strict();
+
+export const updateUserSchema = z
+  .object({
+    name: z.string().trim().min(1, "is required").max(120).optional(),
+    role: roleSchema.optional(),
+    is_active: z.boolean().optional(),
+    password: passwordSchema.optional(),
+    projects: projectGrantsSchema.optional(),
+  })
+  .strict()
+  .refine((patch) => Object.keys(patch).length > 0, "no changes supplied");
+
+export const changePasswordSchema = z
+  .object({
+    current_password: z.string().min(1, "is required").max(MAX_PASSWORD_CHARS),
+    new_password: passwordSchema,
+  })
+  .strict()
+  .refine((b) => b.current_password !== b.new_password, {
+    path: ["new_password"],
+    message: "must differ from the current password",
+  });
+
+export type LoginRequest = z.infer<typeof loginSchema>;
+export type CreateUserRequest = z.infer<typeof createUserSchema>;
+export type UpdateUserRequest = z.infer<typeof updateUserSchema>;
 
 // ---------------------------------------------------------------------------
 // Shared failure shape

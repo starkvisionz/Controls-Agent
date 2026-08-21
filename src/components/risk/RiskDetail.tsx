@@ -3,6 +3,9 @@
 import { useState } from "react";
 import { X } from "lucide-react";
 import { Badge, type Tone } from "@/components/ui/Badge";
+import { ReadOnlyNote } from "@/components/ui/Controls";
+import { useSession } from "@/components/shell/SessionContext";
+import { ROLE_LABELS } from "@/lib/rbac";
 import { Meter } from "@/components/ui/Stat";
 import { money, severityBand, shortDate } from "@/lib/format";
 import type { Risk } from "@/lib/types";
@@ -30,6 +33,9 @@ export function RiskDetail({
   // Initialised from the risk and never re-synced: the caller remounts this
   // component per risk (`key={risk.id}`), which is React's own answer to
   // resetting form state on a prop change and avoids a second render pass.
+  const { can, role } = useSession();
+  const editable = can("risk:write", risk.project_id);
+
   const [status, setStatus] = useState(risk.status);
   const [probability, setProbability] = useState(risk.probability);
   const [impact, setImpact] = useState(risk.impact);
@@ -119,8 +125,10 @@ export function RiskDetail({
           <p className="text-2xs leading-relaxed text-ink-mute">{risk.mitigation_plan}</p>
         </div>
 
-        <div className="mt-4 border-t border-line pt-3">
+        <fieldset className="mt-4 border-t border-line pt-3" disabled={!editable}>
           <div className="label mb-2">Assessment</div>
+
+          {!editable ? <ReadOnlyNote what="the risk register" role={ROLE_LABELS[role]} /> : null}
 
           <ScoreRow label="Probability" value={probability} onChange={setProbability} />
           <ScoreRow label="Impact" value={impact} onChange={setImpact} />
@@ -174,7 +182,7 @@ export function RiskDetail({
           >
             {saving ? "Saving…" : dirty ? "Save assessment" : "No changes"}
           </button>
-        </div>
+        </fieldset>
       </div>
     </aside>
   );

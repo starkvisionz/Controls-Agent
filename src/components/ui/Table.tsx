@@ -7,10 +7,21 @@ export function TableWrap({ children, className = "" }: { children: ReactNode; c
   return <div className={`min-h-0 flex-1 overflow-auto ${className}`}>{children}</div>;
 }
 
-export function Table({ children }: { children: ReactNode }) {
-  // `w-max min-w-full` lets a wide grid scroll inside TableWrap instead of
-  // squeezing every column until the values wrap onto three lines.
-  return <table className="w-max min-w-full border-collapse text-2xs">{children}</table>;
+export function Table({ children, fill = false }: { children: ReactNode; fill?: boolean }) {
+  // `w-max` lets a wide grid scroll inside TableWrap instead of squeezing every
+  // column until the values wrap onto three lines.
+  //
+  // `fill` is for the few grids narrower than their panel, which would
+  // otherwise stop short of its right edge: width 100% with a max-content floor
+  // fills the space when there is slack and still scrolls when there is not.
+  return (
+    <table
+      style={fill ? { width: "100%", minWidth: "max-content" } : undefined}
+      className="w-max border-collapse text-2xs"
+    >
+      {children}
+    </table>
+  );
 }
 
 export function THead({ children }: { children: ReactNode }) {

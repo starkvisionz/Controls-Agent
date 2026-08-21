@@ -254,3 +254,45 @@ CREATE TABLE IF NOT EXISTS chat_messages (
 );
 
 CREATE INDEX IF NOT EXISTS idx_messages_conversation ON chat_messages(conversation_id, created_at);
+
+-- ---------------------------------------------------------------------------
+-- Accounts and access control
+--
+-- Local accounts: there is no identity provider to configure, so the users
+-- table is the source of truth for who may sign in and what they may do.
+--
+-- `role` is the account's role across the portfolio. `user_projects` narrows
+-- that: a user with no rows there sees every project at their global role,
+-- and a user with rows sees only those projects — optionally at a different
+-- role on each. That shape matches how controls staff actually sit on an EPC
+-- portfolio, where a planner on one train is a reader on the next.
+--
+-- `session_version` is bumped whenever a credential or an authorisation
+-- changes. Session cookies carry the version they were issued at, so a
+-- deactivation, a role change or a password reset invalidates the sessions
+-- already out there without a server-side session store.
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS users (
+  id                TEXT PRIMARY KEY,
+  email             TEXT NOT NULL,
+  email_key         TEXT NOT NULL UNIQUE,       -- lower-cased, the uniqueness key
+  name              TEXT NOT NULL,
+  password_hash     TEXT NOT NULL,              -- scrypt$<saltHex>$<hashHex>
+  role              TEXT NOT NULL,              -- viewer | planner | controls_lead | admin
+  is_active         INTEGER NOT NULL DEFAULT 1,
+  session_version   INTEGER NOT NULL DEFAULT 1,
+  must_change_password INTEGER NOT NULL DEFAULT 0,
+  created_at        TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at        TEXT NOT NULL DEFAULT (datetime('now')),
+  last_login_at     TEXT
+);
+
+CREATE TABLE IF NOT EXISTS user_projects (
+  user_id           TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  project_id        TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  -- NULL means "use the account's global role on this project".
+  role              TEXT,
+  PRIMARY KEY (user_id, project_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_user_projects_user ON user_projects(user_id);

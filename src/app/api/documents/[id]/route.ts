@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { requirePermission, requireProjectRead } from "@/lib/guard";
 import { checkRate, tooManyRequests } from "@/lib/rate-limit";
 import { getDb, one } from "@/lib/db";
 import { documentPatchSchema, toFieldErrors } from "@/lib/validation";
@@ -7,20 +8,28 @@ import type { ProjectDocument } from "@/lib/types";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-export async function GET(_req: Request, ctx: { params: Promise<{ id: string }> }) {
+export async function GET(req: Request, ctx: { params: Promise<{ id: string }> }) {
   const { id } = await ctx.params;
   const doc = one<ProjectDocument>(`SELECT * FROM documents WHERE id = ?`, [id]);
   if (!doc) return NextResponse.json({ error: "Document not found" }, { status: 404 });
+
+  const guard = requireProjectRead(req, doc.project_id);
+  if (!guard.ok) return guard.response;
+
   return NextResponse.json({ document: doc });
 }
 
 export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }> }) {
   const { id } = await ctx.params;
 
-  const gate = checkRate(req, "write");
-  if (!gate.allowed) return tooManyRequests(gate.retryAfterSeconds);
   const existing = one<ProjectDocument>(`SELECT * FROM documents WHERE id = ?`, [id]);
   if (!existing) return NextResponse.json({ error: "Document not found" }, { status: 404 });
+
+  const guard = requirePermission(req, "document:write", existing.project_id);
+  if (!guard.ok) return guard.response;
+
+  const gate = checkRate(req, "write", { identity: guard.principal.id });
+  if (!gate.allowed) return tooManyRequests(gate.retryAfterSeconds);
 
   let raw: unknown;
   try {
