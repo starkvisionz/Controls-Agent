@@ -35,6 +35,40 @@ export function applySchema(db: Database.Database): void {
   const schemaFile = path.join(process.cwd(), "src", "lib", "schema.sql");
   const sql = fs.readFileSync(schemaFile, "utf8");
   db.exec(sql);
+  migrate(db);
+}
+
+/**
+ * Columns added to a table that already exists.
+ *
+ * `CREATE TABLE IF NOT EXISTS` is a no-op against a database from an earlier
+ * version, so a new column in schema.sql would never reach an existing install
+ * — it would simply be missing, and every query naming it would throw. Each
+ * entry here is checked against the live table and added only when absent, so
+ * running this on a fresh database does nothing and running it twice is safe.
+ *
+ * Add-only. A column that needs renaming or retyping needs a real migration
+ * with the data move written out, not a line here.
+ */
+const ADDED_COLUMNS: Record<string, Record<string, string>> = {
+  change_orders: {
+    cost_account_id: "TEXT REFERENCES cost_accounts(id) ON DELETE SET NULL",
+    client_ref: "TEXT NOT NULL DEFAULT ''",
+    submitted_date: "TEXT",
+    owner: "TEXT NOT NULL DEFAULT ''",
+  },
+};
+
+export function migrate(db: Database.Database): void {
+  for (const [table, columns] of Object.entries(ADDED_COLUMNS)) {
+    const existing = new Set(
+      (db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[]).map((c) => c.name)
+    );
+    for (const [column, definition] of Object.entries(columns)) {
+      if (existing.has(column)) continue;
+      db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+    }
+  }
 }
 
 /** Typed SELECT returning many rows. */

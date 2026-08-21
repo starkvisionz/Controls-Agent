@@ -1,6 +1,6 @@
 import { all, one, run } from "@/lib/db";
 import type {
-  ChangeOrder,
+  ChangeOrderRow,
   ChatMessage,
   CostAccount,
   CostEntry,
@@ -115,11 +115,38 @@ export function listEvmPeriods(projectId: string): EvmPeriod[] {
   );
 }
 
-export function listChangeOrders(projectId: string): ChangeOrder[] {
-  return all<ChangeOrder>(
-    `SELECT * FROM change_orders WHERE project_id = ? ORDER BY raised_date DESC`,
+export function listChangeOrders(projectId: string): ChangeOrderRow[] {
+  return all<ChangeOrderRow>(
+    `SELECT co.*, ca.code AS account_code, ca.name AS account_name
+       FROM change_orders co
+       LEFT JOIN cost_accounts ca ON ca.id = co.cost_account_id
+      WHERE co.project_id = ?
+      ORDER BY co.raised_date DESC, co.code DESC`,
     [projectId]
   );
+}
+
+export function getChangeOrder(id: string): ChangeOrderRow | undefined {
+  return one<ChangeOrderRow>(
+    `SELECT co.*, ca.code AS account_code, ca.name AS account_name
+       FROM change_orders co
+       LEFT JOIN cost_accounts ca ON ca.id = co.cost_account_id
+      WHERE co.id = ?`,
+    [id]
+  );
+}
+
+/** The next free CO reference for a project, so raising one needs no input. */
+export function nextChangeOrderCode(projectId: string): string {
+  const rows = all<{ code: string }>(
+    `SELECT code FROM change_orders WHERE project_id = ?`,
+    [projectId]
+  );
+  const highest = rows.reduce((max, r) => {
+    const n = Number(/(\d+)\s*$/.exec(r.code)?.[1] ?? 0);
+    return Number.isFinite(n) ? Math.max(max, n) : max;
+  }, 0);
+  return `CO-${String(highest + 1).padStart(3, "0")}`;
 }
 
 // ---------------------------------------------------------------------------

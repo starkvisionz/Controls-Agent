@@ -215,22 +215,36 @@ CREATE INDEX IF NOT EXISTS idx_documents_status  ON documents(project_id, status
 -- ---------------------------------------------------------------------------
 -- Change orders / trends
 -- ---------------------------------------------------------------------------
+-- A change order is money before it is a budget. `cost_account_id` is where an
+-- approved one lands: `cost_accounts.approved_changes` is the SUM of approved
+-- change orders allocated to that account, and nothing else may write it. That
+-- is why approval requires an allocation — you cannot add to a budget without
+-- saying which budget.
+--
+-- Schedule impact is recorded but deliberately NOT applied to the forecast
+-- dates. Starkvisionz stores the network without solving it, so moving a finish
+-- date on approval would assert an entitlement nobody calculated.
 CREATE TABLE IF NOT EXISTS change_orders (
   id                TEXT PRIMARY KEY,
   project_id        TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  cost_account_id   TEXT REFERENCES cost_accounts(id) ON DELETE SET NULL,
   code              TEXT NOT NULL,              -- "CO-007"
+  client_ref        TEXT NOT NULL DEFAULT '',   -- the client's own reference
   title             TEXT NOT NULL,
   origin            TEXT NOT NULL,              -- Client | Internal | Vendor | Site Condition
   status            TEXT NOT NULL,              -- trend | submitted | approved | rejected
   cost_impact       REAL NOT NULL DEFAULT 0,
   schedule_impact_days INTEGER NOT NULL DEFAULT 0,
   raised_date       TEXT NOT NULL,
+  submitted_date    TEXT,                       -- with raised/decision, gives cycle time
   decision_date     TEXT,
+  owner             TEXT NOT NULL DEFAULT '',   -- who is chasing it
   description       TEXT NOT NULL DEFAULT '',
   UNIQUE (project_id, code)
 );
 
 CREATE INDEX IF NOT EXISTS idx_change_orders_project ON change_orders(project_id);
+CREATE INDEX IF NOT EXISTS idx_change_orders_account ON change_orders(cost_account_id);
 
 -- ---------------------------------------------------------------------------
 -- Agent conversations
