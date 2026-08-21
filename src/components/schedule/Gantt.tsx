@@ -3,7 +3,7 @@
 import { useMemo } from "react";
 import { ChevronDown, ChevronRight, Diamond } from "lucide-react";
 import { buildRows, dayOffset, monthTicks, rollUpWbs, type GanttRow } from "./gantt-model";
-import { daysBetween, money, shortDate } from "@/lib/format";
+import { daysBetween, money, percent, shortDate } from "@/lib/format";
 import type { Task, WbsNode } from "@/lib/types";
 
 const NAME_COL = 300;
@@ -204,7 +204,7 @@ function Row({
               {row.task.name}
             </span>
             <span className="ml-auto shrink-0 font-mono text-[10px] text-ink-faint tabular">
-              {row.task.percent_complete}%
+              {percent(row.task.percent_complete, 0)}
             </span>
           </>
         )}
@@ -264,7 +264,7 @@ function TaskBars({ task, origin, dayWidth }: { task: Task; origin: string; dayW
     `Baseline: ${shortDate(task.baseline_start)} → ${shortDate(task.baseline_finish)}\n` +
     `Forecast: ${shortDate(task.forecast_start)} → ${shortDate(task.forecast_finish)}` +
     (slip !== 0 ? ` (${slip > 0 ? "+" : ""}${slip}d)` : "") +
-    `\n${task.percent_complete}% complete · float ${task.total_float_days}d`;
+    `\n${percent(task.percent_complete, 1)} complete · float ${task.total_float_days}d`;
 
   if (task.is_milestone) {
     return (

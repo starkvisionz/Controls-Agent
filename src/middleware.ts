@@ -1,16 +1,21 @@
 import { NextResponse, type NextRequest } from "next/server";
-// Imported from its own module: `@/lib/auth` pulls in node:crypto, which the
-// edge runtime cannot resolve.
-import { SESSION_COOKIE } from "@/lib/session-cookie";
+// Imported from its own module: `@/lib/auth` pulls in node:crypto and the
+// database, neither of which the edge runtime can resolve.
+import { SESSION_COOKIE, SESSION_TAG } from "@/lib/session-cookie";
 
 /**
- * The gate. Every page and every API route passes through here.
+ * The outer gate. Every page and every API route passes through here.
  *
  * Middleware runs on the edge runtime, so it does the cheap half of the check —
  * is there a well-formed, unexpired, correctly signed session cookie — using
- * Web Crypto rather than node:crypto. Routes that mutate data re-check on the
- * Node side; this layer exists so an unauthenticated request never reaches the
- * database at all.
+ * Web Crypto rather than node:crypto. It deliberately does NOT decide what the
+ * holder may do: roles, project scoping and revocation all live in the
+ * database, which this layer cannot reach. That is `src/lib/guard.ts`, which
+ * every route runs on the Node side.
+ *
+ * The division matters. This layer exists so an unauthenticated request never
+ * reaches the database at all; it is not, and must not be mistaken for, the
+ * authorisation check.
  */
 
 const PUBLIC_PATHS = new Set(["/login", "/api/auth/login", "/api/auth/logout"]);
@@ -45,14 +50,17 @@ async function signatureIsValid(payload: string, signature: string, secret: stri
   return expected.length === signature.length && expected === signature;
 }
 
+/** `v2.<userId>.<sessionVersion>.<issuedAt>.<expiresAt>.<signature>` */
 async function hasValidSession(token: string | undefined, secret: string): Promise<boolean> {
   if (!token) return false;
 
   const parts = token.split(".");
-  if (parts.length !== 3) return false;
+  if (parts.length !== 6 || parts[0] !== SESSION_TAG) return false;
 
-  const [issued, expires, signature] = parts;
-  if (!(await signatureIsValid(`${issued}.${expires}`, signature, secret))) return false;
+  const [tag, userId, version, issued, expires, signature] = parts;
+  if (!(await signatureIsValid(`${tag}.${userId}.${version}.${issued}.${expires}`, signature, secret))) {
+    return false;
+  }
 
   const expiresAt = Number(expires);
   return Number.isFinite(expiresAt) && expiresAt * 1000 > Date.now();
@@ -61,25 +69,26 @@ async function hasValidSession(token: string | undefined, secret: string): Promi
 export async function middleware(req: NextRequest) {
   const { pathname, search } = req.nextUrl;
 
-  const password = process.env.STARKVISIONZ_AUTH_PASSWORD?.trim();
   const secret = process.env.STARKVISIONZ_SESSION_SECRET?.trim();
   const isProduction = process.env.NODE_ENV === "production";
 
   // Unconfigured in production: refuse outright rather than serve the project
   // registers to anyone who can reach the host.
-  if (isProduction && (!password || !secret)) {
+  if (isProduction && !secret) {
     return NextResponse.json(
       {
         error:
-          "Starkvisionz is not configured for authenticated access. Set STARKVISIONZ_AUTH_PASSWORD " +
-          "and STARKVISIONZ_SESSION_SECRET, then restart.",
+          "Starkvisionz is not configured for authenticated access. Set " +
+          "STARKVISIONZ_SESSION_SECRET, create an administrator with " +
+          "`npm run user -- add`, then restart.",
       },
       { status: 503 }
     );
   }
 
-  // No credential configured outside production: local development stays open.
-  if (!password || !secret) return NextResponse.next();
+  // No secret outside production: local development stays open, and every
+  // request runs as the development administrator.
+  if (!secret) return NextResponse.next();
 
   if (isPublic(pathname)) return NextResponse.next();
 

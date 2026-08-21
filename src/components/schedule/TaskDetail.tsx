@@ -3,8 +3,11 @@
 import { useState } from "react";
 import { X } from "lucide-react";
 import { Badge, type Tone } from "@/components/ui/Badge";
+import { ReadOnlyNote } from "@/components/ui/Controls";
+import { useSession } from "@/components/shell/SessionContext";
+import { ROLE_LABELS } from "@/lib/rbac";
 import { Meter } from "@/components/ui/Stat";
-import { daysBetween, money, shortDate } from "@/lib/format";
+import { daysBetween, money, percent as formatPercent, shortDate } from "@/lib/format";
 import type { Task } from "@/lib/types";
 
 const STATUS_TONE: Record<Task["status"], Tone> = {
@@ -32,6 +35,11 @@ export function TaskDetail({
   // Initialised from the task and never re-synced: the caller remounts this
   // component per activity (`key={task.id}`), which is React's own answer to
   // resetting form state on a prop change and avoids a second render pass.
+  const { can, role } = useSession();
+  // Asked against this activity's project rather than in general, so an account
+  // that plans one project and only reads another gets the right answer here.
+  const editable = can("schedule:write", task.project_id);
+
   const [percent, setPercent] = useState(task.percent_complete);
   const [status, setStatus] = useState<Task["status"]>(task.status);
   const [saving, setSaving] = useState(false);
@@ -108,8 +116,10 @@ export function TaskDetail({
           </p>
         ) : null}
 
-        <div className="mt-4 border-t border-line pt-3">
+        <fieldset className="mt-4 border-t border-line pt-3" disabled={!editable}>
           <div className="label mb-2">Update progress</div>
+
+          {!editable ? <ReadOnlyNote what="the schedule" role={ROLE_LABELS[role]} /> : null}
 
           {/* Starkvisionz stores the network but does not solve it. Saying so beats
               letting a planner assume successors moved when they did not. */}
@@ -122,7 +132,9 @@ export function TaskDetail({
 
           <div className="mb-1 flex items-center justify-between">
             <span className="text-2xs text-ink-mute">Percent complete</span>
-            <span className="font-mono text-2xs text-ink tabular">{percent}%</span>
+            <span className="font-mono text-2xs text-ink tabular">
+              {formatPercent(percent, Number.isInteger(percent) ? 0 : 1)}
+            </span>
           </div>
           <input
             type="range"
@@ -160,7 +172,7 @@ export function TaskDetail({
           >
             {saving ? "Saving…" : dirty ? "Save progress" : "No changes"}
           </button>
-        </div>
+        </fieldset>
       </div>
     </aside>
   );

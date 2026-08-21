@@ -34,23 +34,56 @@ The database is a local SQLite file; there is no external service to configure.
 ### Before you expose it
 
 Starkvisionz holds a project's cost, schedule and commercial position, so it runs
-behind a session gate. Generate a credential and put both values in
-`.env.local`:
+behind a session gate. Set a signing key and create the first account:
 
 ```bash
-npm run auth:hash -- 'your password'
-# -> STARKVISIONZ_AUTH_PASSWORD=scrypt$...
-#    STARKVISIONZ_SESSION_SECRET=...
+npm run user -- secret          # -> STARKVISIONZ_SESSION_SECRET=...   (into .env.local)
+npm run user -- add --email you@example.com --name 'Your Name' --role admin
 ```
 
-With those set, every page and every API route requires a session. Without
-them, Starkvisionz runs unauthenticated **only** in development; in production it
-returns 503 rather than serving the registers to anyone who can reach the host.
-`STARKVISIONZ_AUTH_PASSWORD` also accepts a plain string if you want to get moving
-before hardening.
+With a secret set, every page and every API route requires a session. Without
+one, Starkvisionz runs unauthenticated **only** in development, as a local
+administrator; in production it returns 503 rather than serving the registers to
+anyone who can reach the host.
 
-This is single-operator access. Multiple users with per-project roles would be
-a larger change and is not attempted here.
+There is no sign-up page. The first account is created on the host by somebody
+who already has it, and every account after that by an administrator.
+
+### Who can do what
+
+Accounts are local — stored in the same SQLite file, passwords hashed with
+scrypt — and carry one of four roles:
+
+| Role | Read | Schedule | Documents | Cost | Risk | Accounts |
+|---|:-:|:-:|:-:|:-:|:-:|:-:|
+| **Viewer** | ● | | | | | |
+| **Planner** | ● | ● | ● | | | |
+| **Controls lead** | ● | ● | ● | ● | ● | |
+| **Administrator** | ● | ● | ● | ● | ● | ● |
+
+Reading includes the agent panel: it answers from the whole project, so asking
+it something needs the same access as opening the register.
+
+![The Accounts view](docs/accounts.png)
+
+An account can also be **scoped to particular projects**, optionally at a
+different role on each — a planner on one train and a reader on the next is the
+normal case on a portfolio. An account with no scoping sees everything at its
+own role, including projects added later. Out of scope reads as *not found*
+rather than *forbidden*: which projects exist is itself commercially
+interesting.
+
+```bash
+npm run user -- list
+npm run user -- scope --email planner@example.com --projects GC-4410,NV-2208:viewer
+npm run user -- role  --email planner@example.com --role controls_lead
+npm run user -- disable --email someone@example.com
+```
+
+Administrators can do all of that in the **Accounts** view as well. Accounts are
+disabled rather than deleted, so who made a change stays legible. Changing a
+role, a password or a project scope ends that account's live sessions on the
+next request.
 
 ### The agent
 
@@ -86,6 +119,13 @@ the API runs, then shapes actual cost around the resulting earned value to hit
 the target CPI. Per-account variance is real; the headline matches the story;
 and the seeded database satisfies the same invariant a live edit does.
 
+It also creates four demo accounts, one per role — the password is printed by
+the seeder — so the access model can be tried rather than read about. The
+read-only one is scoped to a single project, which is what makes the portfolio
+filter visible. They are skipped under `NODE_ENV=production` unless you pass
+`--demo-users` on purpose, and the seeder never touches an account it did not
+create.
+
 `npm run db:reset` rebuilds from scratch.
 
 ## How it fits together
@@ -103,17 +143,22 @@ src/
     shell/                title bar, sidebar, status bar, resizable frame
     charts/               Recharts wrappers over one shared chart theme
     chat/                 agent panel, SSE client, markdown renderer
-    dashboard/ schedule/ cost/ risk/ documents/
+    dashboard/ schedule/ cost/ risk/ documents/ users/
     ui/                   panels, tables, badges, stat tiles, controls
   lib/
     schema.sql            the full EPC schema
     db.ts queries.ts      connection and the typed query + metrics layer
     rollup-core.mjs       schedule -> cost roll-up, shared with the seeder
     validation.ts         Zod schemas shared by the UI and the API
-    auth.ts rate-limit.ts session credential and token buckets
+    rbac.ts               roles, permissions, and the one `can()` they answer
+    auth.ts guard.ts      sessions, and the check every route runs
+    users.ts              the account store, over accounts-core.mjs
+    accounts-core.mjs     password hashing and account writes, shared with the CLI
+    rate-limit.ts         token buckets, keyed on the account where there is one
     agent-context.ts      builds the agent's briefing from the database
     agent-local.ts        the offline analyst
 scripts/seed.mjs          the demo-portfolio generator
+scripts/user.mjs          account administration, and the bootstrap path
 ```
 
 ### A few decisions worth knowing
@@ -138,6 +183,28 @@ comes from the ledger, not from progress.
 
 `projectMetrics()` in `src/lib/queries.ts` is the single definition of SPI, CPI,
 EAC, ETC, VAC and TCPI on top of that roll-up.
+
+**Authorisation is asked once, about a project.** `src/lib/rbac.ts` holds the
+role-to-permission table and a single `can(principal, permission, projectId)`.
+The API routes call it through `src/lib/guard.ts`; the UI calls it directly to
+decide what to offer. One table, both consumers — the alternative is an
+interface that hides a button the API would have accepted, or offers one it
+refuses.
+
+Nearly every check passes a project id. Without one the question becomes "could
+this account ever do this", which is the wrong question the moment somebody is
+scoped to part of the portfolio — and it is how a scoped user gets shown an
+edit button that 404s. A row is authorised against the project it belongs to
+rather than the URL it arrived on, so knowing an id is not a way around scoping.
+
+**Sessions carry the account, and revocation is a column.** The cookie is a
+signed bearer holding the account id and that account's `session_version`. There
+is no server-side session table to lose on a restart; ending a session is a
+version bump, which is what makes a password change, a role change or a
+deactivation take effect on the next request rather than in twelve hours. The
+edge middleware checks the signature and expiry, because that is all it can
+reach; the Node routes re-resolve the account against the database, which is
+where a since-revoked session is actually caught.
 
 **The agent gets a briefing, not a database handle.** Every chat turn rebuilds a
 plain-text snapshot of the project from the current tables and hands that to the
@@ -187,9 +254,12 @@ seed, then `scripts/smoke.mjs` against the built server.
 The smoke test asserts the things this README claims rather than leaving them
 as assertions in prose — that a schedule edit moves project EVM, that no page,
 read or write is reachable without a session, that a forged cookie is refused,
-that out-of-range and unknown fields are rejected, that a forged
-`X-Forwarded-For` cannot defeat the rate limit, and that the agent still
-streams SSE and quotes the current figures. It runs with no `ANTHROPIC_API_KEY`,
+that each role is allowed exactly what its permissions say and refused the
+rest, that a scoped account cannot see or reach a project it was not granted,
+that changing an account ends the sessions it already had, that out-of-range and
+unknown fields are rejected, that a forged `X-Forwarded-For` cannot defeat the
+rate limit, and that the agent still streams SSE and quotes the current
+figures. It runs with no `ANTHROPIC_API_KEY`,
 so it exercises the local analyst and never depends on a provider.
 
 ## Scripts
@@ -203,11 +273,14 @@ so it exercises the local analyst and never depends on a provider.
 | `npm run typecheck` | `tsc --noEmit` |
 | `npm run lint` | ESLint over the whole tree |
 | `npm run smoke` | Assert the auth gate, validation, roll-up and streaming against a running build |
-| `npm run auth:hash -- 'pw'` | Generate `STARKVISIONZ_AUTH_PASSWORD` and `STARKVISIONZ_SESSION_SECRET` |
+| `npm run user -- list` | Accounts, roles and project scope |
+| `npm run user -- add` | Create an account — the bootstrap path for the first one |
+| `npm run user -- secret` | Generate a `STARKVISIONZ_SESSION_SECRET` |
 
 ## Stack
 
 Next.js 15 (App Router) · React 19 · TypeScript · Tailwind CSS v4 · SQLite via
 better-sqlite3 · Zod · Recharts · react-resizable-panels · lucide-react ·
-`@anthropic-ai/sdk` for the streaming agent. Session auth uses `node:crypto`
-only — no auth dependency.
+`@anthropic-ai/sdk` for the streaming agent. Sessions, password hashing and
+role-based access use `node:crypto` and the app's own tables — no auth
+dependency, and no identity provider to configure.

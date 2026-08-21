@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 
 export function LoginForm({ redirectTo }: { redirectTo: string }) {
   const router = useRouter();
+  const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -17,7 +18,7 @@ export function LoginForm({ redirectTo }: { redirectTo: string }) {
       const res = await fetch("/api/auth/login", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ password }),
+        body: JSON.stringify({ email, password }),
       });
       if (!res.ok) {
         const body = (await res.json().catch(() => ({}))) as { error?: string };
@@ -27,6 +28,7 @@ export function LoginForm({ redirectTo }: { redirectTo: string }) {
       router.refresh();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Sign in failed");
+      // The address stays: a mistyped password should not cost both fields.
       setPassword("");
     } finally {
       setBusy(false);
@@ -35,13 +37,25 @@ export function LoginForm({ redirectTo }: { redirectTo: string }) {
 
   return (
     <form onSubmit={submit} className="panel p-4">
-      <label htmlFor="password" className="label">
-        Operator password
+      <label htmlFor="email" className="label">
+        Email
+      </label>
+      <input
+        id="email"
+        type="email"
+        autoFocus
+        autoComplete="username"
+        value={email}
+        onChange={(e) => setEmail(e.target.value)}
+        className="mt-1.5 h-8 w-full rounded-sm border border-line bg-raised px-2 text-xs text-ink focus:border-accent/50"
+      />
+
+      <label htmlFor="password" className="label mt-3 block">
+        Password
       </label>
       <input
         id="password"
         type="password"
-        autoFocus
         autoComplete="current-password"
         value={password}
         onChange={(e) => setPassword(e.target.value)}
@@ -52,7 +66,7 @@ export function LoginForm({ redirectTo }: { redirectTo: string }) {
 
       <button
         type="submit"
-        disabled={busy || password.length === 0}
+        disabled={busy || email.length === 0 || password.length === 0}
         className="mt-3 h-8 w-full rounded-sm bg-accent text-2xs font-medium text-black transition-opacity disabled:bg-line disabled:text-ink-faint"
       >
         {busy ? "Signing in…" : "Sign in"}

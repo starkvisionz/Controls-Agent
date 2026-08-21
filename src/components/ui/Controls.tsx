@@ -1,6 +1,6 @@
 "use client";
 
-import { Search } from "lucide-react";
+import { Lock, Search } from "lucide-react";
 import type { ReactNode } from "react";
 
 export function Toolbar({ children }: { children: ReactNode }) {
@@ -135,5 +135,23 @@ export function LoadingPane({ label = "Loading" }: { label?: string }) {
       <span className="animate-pulse-dot inline-block h-1.5 w-1.5 rounded-full bg-accent" />
       {label}…
     </div>
+  );
+}
+
+/**
+ * Shown in place of an editor when the account may read a register but not
+ * change it.
+ *
+ * The controls are still rendered, disabled, rather than removed: seeing the
+ * fields greyed out with a reason attached tells you what you would be able to
+ * do with more access, which "the panel is simply missing" does not.
+ */
+export function ReadOnlyNote({ what, role }: { what: string; role: string }) {
+  return (
+    <p className="mb-3 rounded-sm border border-line bg-raised px-2 py-1.5 text-[10px] leading-relaxed text-ink-faint">
+      <Lock className="mr-1 inline h-2.5 w-2.5 -translate-y-px" />
+      Your role ({role}) can read {what} but not change it. Ask an administrator if that is
+      wrong.
+    </p>
   );
 }

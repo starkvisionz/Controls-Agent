@@ -17,10 +17,11 @@ jobs:
     timeout-minutes: 15
 
     env:
-      # The smoke test drives a real signed-in session against the built app.
-      # These are throwaway values for this run only.
-      STARKVISIONZ_AUTH_PASSWORD: ci-smoke-password
+      # The smoke test drives real signed-in sessions against the built app, one
+      # per role. A throwaway signing key for this run only; the accounts
+      # themselves come from the seeder.
       STARKVISIONZ_SESSION_SECRET: ci-only-session-secret-not-a-real-one
+      STARKVISIONZ_DEMO_PASSWORD: ci-only-demo-password
       # No ANTHROPIC_API_KEY: CI exercises the local analyst path deliberately,
       # so the suite never depends on a provider or spends tokens.
 
@@ -46,8 +47,10 @@ jobs:
       - name: Build
         run: npm run build
 
-      - name: Seed the database
-        run: npm run db:seed
+      # --demo-users because the seeder refuses to create known-password
+      # accounts under NODE_ENV=production without being asked.
+      - name: Seed the database and its demo accounts
+        run: npm run db:seed -- --demo-users
 
       # The redirect matters: a backgrounded process that inherits the step's
       # stdout keeps that pipe open, and the runner waits on it, so the step

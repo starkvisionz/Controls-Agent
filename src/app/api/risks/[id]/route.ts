@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { requirePermission, requireProjectRead } from "@/lib/guard";
 import { checkRate, tooManyRequests } from "@/lib/rate-limit";
 import { getDb, one } from "@/lib/db";
 import { riskPatchSchema, toFieldErrors } from "@/lib/validation";
@@ -7,21 +8,28 @@ import type { Risk } from "@/lib/types";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-export async function GET(_req: Request, ctx: { params: Promise<{ id: string }> }) {
+export async function GET(req: Request, ctx: { params: Promise<{ id: string }> }) {
   const { id } = await ctx.params;
   const risk = one<Risk>(`SELECT * FROM risks WHERE id = ?`, [id]);
   if (!risk) return NextResponse.json({ error: "Risk not found" }, { status: 404 });
+
+  const guard = requireProjectRead(req, risk.project_id);
+  if (!guard.ok) return guard.response;
+
   return NextResponse.json({ risk });
 }
 
 export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }> }) {
   const { id } = await ctx.params;
 
-  const gate = checkRate(req, "write");
+  const existing = one<Risk>(`SELECT id, project_id FROM risks WHERE id = ?`, [id]);
+  if (!existing) return NextResponse.json({ error: "Risk not found" }, { status: 404 });
+
+  const guard = requirePermission(req, "risk:write", existing.project_id);
+  if (!guard.ok) return guard.response;
+
+  const gate = checkRate(req, "write", { identity: guard.principal.id });
   if (!gate.allowed) return tooManyRequests(gate.retryAfterSeconds);
-  if (!one<Risk>(`SELECT id FROM risks WHERE id = ?`, [id])) {
-    return NextResponse.json({ error: "Risk not found" }, { status: 404 });
-  }
 
   let raw: unknown;
   try {

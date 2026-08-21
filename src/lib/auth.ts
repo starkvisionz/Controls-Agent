@@ -1,33 +1,38 @@
-import { createHmac, randomBytes, scryptSync, timingSafeEqual } from "node:crypto";
-import { SESSION_COOKIE, SESSION_TTL_SECONDS } from "@/lib/session-cookie";
+import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
+import { SESSION_COOKIE, SESSION_TAG, SESSION_TTL_SECONDS } from "@/lib/session-cookie";
+import type { Principal } from "@/lib/rbac";
+import { countUsers, findUserById, toPrincipal, type UserRow } from "@/lib/users";
 
 /**
- * Single-operator authentication.
+ * Sessions and the identity behind them.
  *
- * Starkvisionz holds a project's cost, schedule and commercial position — the kind of
- * data that should never be readable, and certainly never writable, by whoever
- * happens to find the host. This module gates the whole application behind one
- * operator credential, which is the right shape for a single-instance install.
- * Multi-user access with per-project roles is a larger change and deliberately
- * not attempted here.
+ * Starkvisionz holds a project's cost, schedule and commercial position, so who is
+ * asking decides what comes back. Accounts are local — see `src/lib/users.ts` —
+ * and this module turns a signed cookie back into the account that holds it.
  *
  * Design notes:
- * - The session is a signed, expiring cookie. There is no server-side session
- *   store to lose on restart, and no session id worth stealing from the DB.
- * - Comparisons are constant-time; a timing oracle on the password or the
- *   signature would defeat the point.
- * - Production without a configured password fails CLOSED. An unauthenticated
+ * - The cookie is a signed, expiring bearer with no server-side session store
+ *   to lose on restart. It carries the account id and the account's
+ *   `session_version`, so revocation is a column bump rather than a table of
+ *   live sessions: change a password, a role or a project grant and every
+ *   cookie already issued stops verifying.
+ * - The edge middleware checks the signature and the expiry only, because it
+ *   cannot reach the database. Node routes re-resolve the account on every
+ *   request, which is where deactivation and version checks actually bite.
+ * - Comparisons are constant-time; a timing oracle on the signature would
+ *   defeat the point.
+ * - Production without a session secret fails CLOSED. An unauthenticated
  *   controls system on the public internet is the failure this exists to stop,
- *   so it must never be the default when configuration is missing.
+ *   so it must never be what a missing variable produces.
  */
 
 export { SESSION_COOKIE };
 
 export type AuthMode =
   | { kind: "enforced"; secret: string }
-  /** Localhost development with no password set: open, and says so loudly. */
+  /** Local development with no secret set: open, and the UI says so. */
   | { kind: "open"; reason: string }
-  /** Production with no password set: refuse to serve rather than serve nude. */
+  /** Production with no secret set: refuse to serve rather than serve nude. */
   | { kind: "misconfigured"; reason: string };
 
 function envValue(name: string): string | undefined {
@@ -41,45 +46,46 @@ function envValue(name: string): string | undefined {
  * is protected but is not.
  */
 export function authMode(): AuthMode {
-  const password = envValue("STARKVISIONZ_AUTH_PASSWORD");
   const secret = envValue("STARKVISIONZ_SESSION_SECRET");
-  const isProduction = process.env.NODE_ENV === "production";
+  if (secret) return { kind: "enforced", secret };
 
-  if (!password) {
-    return isProduction
-      ? {
-          kind: "misconfigured",
-          reason:
-            "STARKVISIONZ_AUTH_PASSWORD is not set. Starkvisionz will not serve project data " +
-            "unauthenticated in production.",
-        }
-      : {
-          kind: "open",
-          reason: "STARKVISIONZ_AUTH_PASSWORD is not set — running unauthenticated for local development.",
-        };
-  }
-
-  if (!secret) {
-    return isProduction
-      ? {
-          kind: "misconfigured",
-          reason: "STARKVISIONZ_SESSION_SECRET is not set. Session cookies cannot be signed.",
-        }
-      : {
-          kind: "open",
-          reason: "STARKVISIONZ_SESSION_SECRET is not set — running unauthenticated for local development.",
-        };
-  }
-
-  return { kind: "enforced", secret };
+  return process.env.NODE_ENV === "production"
+    ? {
+        kind: "misconfigured",
+        reason:
+          "STARKVISIONZ_SESSION_SECRET is not set. Starkvisionz will not serve project data " +
+          "unauthenticated in production.",
+      }
+    : {
+        kind: "open",
+        reason:
+          "STARKVISIONZ_SESSION_SECRET is not set — running as a local development " +
+          "administrator with access control switched off.",
+      };
 }
 
 export function isAuthEnforced(): boolean {
   return authMode().kind === "enforced";
 }
 
+/**
+ * The identity used when the app is running open for local development.
+ *
+ * It is an administrator so that `npm run dev` works with no configuration, and
+ * it is flagged so every surface that shows who you are can say plainly that
+ * nothing is being enforced.
+ */
+export const DEVELOPMENT_PRINCIPAL: Principal = {
+  id: "development",
+  email: "development@localhost",
+  name: "Local development",
+  role: "admin",
+  grants: [],
+  development: true,
+};
+
 // ---------------------------------------------------------------------------
-// Password
+// Session token
 // ---------------------------------------------------------------------------
 
 /** Length-safe constant-time comparison. */
@@ -94,67 +100,109 @@ function safeEqual(a: string, b: string): boolean {
   return timingSafeEqual(left, right);
 }
 
-/**
- * Checks a submitted password.
- *
- * `STARKVISIONZ_AUTH_PASSWORD` may hold either a `scrypt$<saltHex>$<hashHex>` digest
- * (preferred — see `npm run auth:hash`) or a plain string, so an operator can
- * get running quickly and harden later without a code change.
- */
-export function verifyPassword(submitted: string): boolean {
-  const configured = envValue("STARKVISIONZ_AUTH_PASSWORD");
-  if (!configured) return false;
-
-  if (configured.startsWith("scrypt$")) {
-    const [, saltHex, hashHex] = configured.split("$");
-    if (!saltHex || !hashHex) return false;
-    try {
-      const expected = Buffer.from(hashHex, "hex");
-      const actual = scryptSync(submitted, Buffer.from(saltHex, "hex"), expected.length);
-      return expected.length === actual.length && timingSafeEqual(expected, actual);
-    } catch {
-      return false;
-    }
-  }
-
-  return safeEqual(submitted, configured);
-}
-
-/** Produces the `scrypt$salt$hash` form for STARKVISIONZ_AUTH_PASSWORD. */
-export function hashPassword(plain: string): string {
-  const salt = randomBytes(16);
-  const hash = scryptSync(plain, salt, 32);
-  return `scrypt$${salt.toString("hex")}$${hash.toString("hex")}`;
-}
-
-// ---------------------------------------------------------------------------
-// Session token
-// ---------------------------------------------------------------------------
-
 function sign(payload: string, secret: string): string {
   return createHmac("sha256", secret).update(payload).digest("base64url");
 }
 
-/** `<issuedAt>.<expiresAt>.<signature>` — no secrets, no PII, just a bearer. */
-export function issueSession(secret: string, now = Date.now()): string {
+/** `v2.<userId>.<sessionVersion>.<issuedAt>.<expiresAt>.<signature>` */
+export { SESSION_TAG as SESSION_VERSION_TAG };
+
+export type SessionClaims = { userId: string; sessionVersion: number; expiresAt: number };
+
+export function issueSession(user: UserRow, secret: string, now = Date.now()): string {
   const issued = Math.floor(now / 1000);
   const expires = issued + SESSION_TTL_SECONDS;
-  const payload = `${issued}.${expires}`;
+  // The id is generated by `createUser` and never contains a separator; a
+  // hand-edited row that did would produce a token that cannot be parsed back,
+  // which fails closed.
+  const payload = `${SESSION_TAG}.${user.id}.${user.session_version}.${issued}.${expires}`;
   return `${payload}.${sign(payload, secret)}`;
 }
 
-export function verifySession(token: string | undefined, secret: string, now = Date.now()): boolean {
-  if (!token) return false;
+/** Verifies signature and expiry. Says nothing about whether the account still exists. */
+export function readSession(
+  token: string | undefined,
+  secret: string,
+  now = Date.now()
+): SessionClaims | null {
+  if (!token) return null;
 
   const parts = token.split(".");
-  if (parts.length !== 3) return false;
+  if (parts.length !== 6 || parts[0] !== SESSION_TAG) return null;
 
-  const [issued, expires, signature] = parts;
-  const payload = `${issued}.${expires}`;
-  if (!safeEqual(signature, sign(payload, secret))) return false;
+  const [, userId, version, issued, expires, signature] = parts;
+  const payload = `${SESSION_TAG}.${userId}.${version}.${issued}.${expires}`;
+  if (!safeEqual(signature, sign(payload, secret))) return null;
 
   const expiresAt = Number(expires);
-  return Number.isFinite(expiresAt) && expiresAt * 1000 > now;
+  const sessionVersion = Number(version);
+  if (!Number.isFinite(expiresAt) || !Number.isInteger(sessionVersion)) return null;
+  if (expiresAt * 1000 <= now) return null;
+
+  return { userId, sessionVersion, expiresAt };
+}
+
+// ---------------------------------------------------------------------------
+// Request -> principal
+// ---------------------------------------------------------------------------
+
+function cookieFromRequest(req: Request, name: string): string | undefined {
+  const header = req.headers.get("cookie");
+  if (!header) return undefined;
+  for (const part of header.split(";")) {
+    const [key, ...rest] = part.trim().split("=");
+    if (key === name) return rest.join("=");
+  }
+  return undefined;
+}
+
+export type Resolution =
+  | { ok: true; principal: Principal }
+  | { ok: false; status: 401 | 503; reason: string };
+
+/**
+ * Turns a request into the account making it.
+ *
+ * This is the check that matters. The middleware has already refused anything
+ * without a well-formed cookie, but it could not know whether the account was
+ * since deactivated, demoted or re-scoped — so every route asks here, and the
+ * answer comes from the current row rather than from the token.
+ */
+export function resolvePrincipal(req: Request): Resolution {
+  return resolveSessionToken(cookieFromRequest(req, SESSION_COOKIE));
+}
+
+/**
+ * The same resolution from a raw cookie value, for server components that read
+ * `cookies()` rather than holding a Request.
+ */
+export function resolveSessionToken(token: string | undefined): Resolution {
+  const mode = authMode();
+
+  if (mode.kind === "misconfigured") return { ok: false, status: 503, reason: mode.reason };
+  if (mode.kind === "open") return { ok: true, principal: DEVELOPMENT_PRINCIPAL };
+
+  const claims = readSession(token, mode.secret);
+  if (!claims) return { ok: false, status: 401, reason: "Authentication required" };
+
+  const user = findUserById(claims.userId);
+  if (!user || user.is_active !== 1) {
+    return { ok: false, status: 401, reason: "This account is no longer active." };
+  }
+  if (user.session_version !== claims.sessionVersion) {
+    return {
+      ok: false,
+      status: 401,
+      reason: "Your access changed, so this session ended. Sign in again.",
+    };
+  }
+
+  return { ok: true, principal: toPrincipal(user) };
+}
+
+/** Whether an operator still has to create the first account. */
+export function needsBootstrap(): boolean {
+  return authMode().kind === "enforced" && countUsers() === 0;
 }
 
 export const sessionCookieOptions = {
@@ -165,3 +213,8 @@ export const sessionCookieOptions = {
   // Set on HTTPS deployments; left off locally so login works over plain http.
   secure: process.env.NODE_ENV === "production",
 };
+
+/** Used by `npm run auth:secret` to print a signing key. */
+export function generateSecret(): string {
+  return randomBytes(32).toString("hex");
+}

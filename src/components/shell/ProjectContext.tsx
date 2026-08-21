@@ -10,8 +10,14 @@ import {
   type ReactNode,
 } from "react";
 import type { Project, ProjectMetrics } from "@/lib/types";
+import type { Role } from "@/lib/rbac";
 
-export type ProjectWithMetrics = Project & { metrics: ProjectMetrics };
+/**
+ * `role` is the role the signed-in account holds *on this project*, which is
+ * not always its portfolio-wide role — a lead on one train can be a reader on
+ * the next. The API sends it with each row so the UI never has to guess.
+ */
+export type ProjectWithMetrics = Project & { metrics: ProjectMetrics; role: Role | null };
 
 type ProjectContextValue = {
   projects: ProjectWithMetrics[];

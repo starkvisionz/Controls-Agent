@@ -23,8 +23,15 @@ export const LIMITS = {
   chat: { capacity: 8, refillPerSecond: 1 / 15 },
   /** Writes: generous for a progress review, hostile to a hammering client. */
   write: { capacity: 40, refillPerSecond: 1 },
-  /** Login: slow enough that guessing over the network is not viable. */
-  login: { capacity: 5, refillPerSecond: 1 / 60 },
+  /**
+   * Login: slow enough that guessing over the network is not viable.
+   *
+   * Sized for the shared bucket, which is what an instance behind no declared
+   * proxy uses: a controls team arriving in the morning must not lock itself
+   * out. Sustained, this is three attempts a minute against a twelve-character
+   * minimum — not a rate anyone guesses a password at.
+   */
+  login: { capacity: 10, refillPerSecond: 1 / 20 },
 } satisfies Record<string, Limit>;
 
 /**
@@ -126,7 +133,11 @@ export function clientAddress(req: Request): string | null {
  * That throttles legitimate users together, which is the safe direction to be
  * wrong in — the alternative is an unenforced limit.
  */
-export function clientKey(req: Request, scope: Scope): string {
+export function clientKey(req: Request, scope: Scope, identity?: string): string {
+  // A signed-in account is a far better identity than an address: it survives a
+  // changed IP, it is not caller-forgeable, and it stops one person on a shared
+  // office address from consuming everybody else's allowance.
+  if (identity) return `${scope}:user:${identity}`;
   return `${scope}:${clientAddress(req) ?? "shared"}`;
 }
 
@@ -134,8 +145,13 @@ export function clientKey(req: Request, scope: Scope): string {
  * The check every limited route runs: the caller's own allowance and the
  * instance-wide ceiling, both of which must have room.
  */
-export function checkRate(req: Request, scope: Scope, now = Date.now()): RateResult {
-  const perClient = consume(clientKey(req, scope), LIMITS[scope], now);
+export function checkRate(
+  req: Request,
+  scope: Scope,
+  options: { identity?: string; now?: number } = {}
+): RateResult {
+  const now = options.now ?? Date.now();
+  const perClient = consume(clientKey(req, scope, options.identity), LIMITS[scope], now);
   if (!perClient.allowed) return perClient;
 
   return consume(`global:${scope}`, GLOBAL_LIMITS[scope], now);

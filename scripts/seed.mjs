@@ -10,6 +10,7 @@ import Database from "better-sqlite3";
 import fs from "node:fs";
 import path from "node:path";
 import { recalculateProject } from "../src/lib/rollup-core.mjs";
+import { insertUser, normaliseEmail, replaceGrants } from "../src/lib/accounts-core.mjs";
 
 const ROOT = process.cwd();
 const DB_PATH = process.env.STARKVISIONZ_DB_PATH
@@ -1252,6 +1253,84 @@ const wipe = db.transaction(() => {
   }
 });
 
+
+// --------------------------------------------------------------------------
+// Demo accounts
+//
+// One per role, so the access model can be seen rather than described. They
+// exist to be signed into on a demo instance, which is exactly why they are
+// dangerous anywhere else: the password is in this file. So they are skipped
+// under NODE_ENV=production unless --demo-users is passed on purpose, and the
+// seeder never touches an account it did not create — re-seeding a real
+// instance leaves its real administrators alone.
+// --------------------------------------------------------------------------
+const DEMO_PASSWORD = process.env.STARKVISIONZ_DEMO_PASSWORD?.trim() || "starkvisionz-demo";
+
+const DEMO_USERS = [
+  {
+    email: "admin@starkvisionz.example",
+    name: "Dana Okafor",
+    role: "admin",
+    note: "portfolio administrator — everything, including accounts",
+  },
+  {
+    email: "lead@starkvisionz.example",
+    name: "Marc Delacroix",
+    role: "controls_lead",
+    note: "controls lead — schedule, cost, risk and documents",
+  },
+  {
+    email: "planner@starkvisionz.example",
+    name: "Ines Haddad",
+    role: "planner",
+    note: "planner — schedule and documents, no cost or risk",
+  },
+  {
+    email: "viewer@starkvisionz.example",
+    name: "Tom Rasmussen",
+    role: "viewer",
+    // Scoped to one project, so the portfolio filter is visible in the demo:
+    // this account sees a one-project switcher, not three greyed-out rows.
+    projects: ["GC-4410"],
+    note: "read-only, GC-4410 only",
+  },
+];
+
+function seedDemoUsers() {
+  const wanted = process.argv.includes("--demo-users");
+  if (process.env.NODE_ENV === "production" && !wanted) {
+    console.log("\n  Demo accounts skipped (NODE_ENV=production). Use `npm run user -- add`.\n");
+    return [];
+  }
+
+  const idFor = (code) => db.prepare(`SELECT id FROM projects WHERE code = ?`).get(code)?.id;
+
+  return DEMO_USERS.map((demo) => {
+    const existing = db
+      .prepare(`SELECT id FROM users WHERE email_key = ?`)
+      .get(normaliseEmail(demo.email));
+
+    const grants = (demo.projects ?? []).map((code) => ({ project_id: idFor(code), role: null }));
+
+    if (existing) {
+      // The account survived; its grants did not, because wiping the projects
+      // cascaded them away. Put them back without touching the credential.
+      replaceGrants(db, existing.id, grants);
+      return { ...demo, created: false };
+    }
+
+    insertUser(db, {
+      email: demo.email,
+      name: demo.name,
+      password: DEMO_PASSWORD,
+      role: demo.role,
+      projects: grants,
+      mustChangePassword: false,
+    });
+    return { ...demo, created: true };
+  });
+}
+
 /** Derives a stable stream seed from the project code. */
 const seedFor = (code) =>
   [...code].reduce((h, ch) => (h * 31 + ch.charCodeAt(0)) % 4294967296, 7);
@@ -1271,6 +1350,7 @@ const build = db.transaction(() => {
 
 wipe();
 build();
+const demoUsers = db.transaction(seedDemoUsers)();
 
 // --------------------------------------------------------------------------
 // Report
@@ -1288,6 +1368,15 @@ console.log(`    risks          ${count("risks")}`);
 console.log(`    documents      ${count("documents")}`);
 console.log(`    change_orders  ${count("change_orders")}`);
 console.log(`    chat_messages  ${count("chat_messages")}`);
+console.log(`    users          ${count("users")}`);
+
+if (demoUsers.length > 0) {
+  console.log("\n  Demo accounts — password for all of them: " + DEMO_PASSWORD + "\n");
+  for (const u of demoUsers) {
+    const state = u.created ? "" : "  (already existed, left as it was)";
+    console.log(`    ${u.email.padEnd(34)} ${u.note}${state}`);
+  }
+}
 
 console.log("\n  Performance roll-up:\n");
 for (const row of db.prepare(`

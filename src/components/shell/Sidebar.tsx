@@ -9,15 +9,20 @@ import {
   PanelLeftClose,
   PanelLeftOpen,
   ShieldAlert,
+  Users,
   Wallet,
 } from "lucide-react";
 import type { ComponentType } from "react";
+import { useSession } from "./SessionContext";
+import type { Permission } from "@/lib/rbac";
 
 type NavItem = {
   href: string;
   label: string;
   icon: ComponentType<{ className?: string }>;
   hint: string;
+  /** Omitted for the views every account can reach. */
+  permission?: Permission;
 };
 
 const NAV: NavItem[] = [
@@ -26,6 +31,13 @@ const NAV: NavItem[] = [
   { href: "/cost", label: "Cost", icon: Wallet, hint: "Control accounts, commitments and forecast" },
   { href: "/risk", label: "Risk", icon: ShieldAlert, hint: "Register, matrix and mitigation" },
   { href: "/documents", label: "Documents", icon: FileText, hint: "Deliverable register and review status" },
+  {
+    href: "/users",
+    label: "Accounts",
+    icon: Users,
+    hint: "Who may sign in, and what they may change",
+    permission: "user:manage",
+  },
 ];
 
 export function Sidebar({
@@ -38,6 +50,11 @@ export function Sidebar({
   badges: Record<string, number | undefined>;
 }) {
   const pathname = usePathname();
+  const { can } = useSession();
+
+  // Hiding a link nobody may follow is tidiness, not access control: the page
+  // and its API both refuse independently.
+  const items = NAV.filter((item) => !item.permission || can(item.permission));
 
   return (
     <nav
@@ -46,7 +63,7 @@ export function Sidebar({
       }`}
     >
       <ul className="flex flex-col gap-px p-2">
-        {NAV.map((item) => {
+        {items.map((item) => {
           const active = item.href === "/" ? pathname === "/" : pathname.startsWith(item.href);
           const Icon = item.icon;
           const badge = badges[item.href];
