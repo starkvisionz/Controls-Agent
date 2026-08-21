@@ -14,7 +14,7 @@ import type { CostAccount, Project } from "@/lib/types";
 /**
  * The offline analyst.
  *
- * When no ANTHROPIC_API_KEY is configured, Hermes still has to answer — a
+ * When no ANTHROPIC_API_KEY is configured, Starkvisionz still has to answer — a
  * controls tool that goes blank without a network key is not much of a tool.
  * This module reads the same tables the Claude-backed path reads and composes
  * a grounded answer from them. It is deterministic and never invents figures.

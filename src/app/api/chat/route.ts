@@ -86,7 +86,7 @@ export async function POST(req: Request) {
             userMessageId,
             conversationId,
             source: usingClaude ? "claude" : "local",
-            model: usingClaude ? MODEL : "hermes-local-analyst",
+            model: usingClaude ? MODEL : "starkvisionz-local-analyst",
           })
         );
 

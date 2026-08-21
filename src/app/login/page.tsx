@@ -15,7 +15,7 @@ export default async function LoginPage({
     <div className="flex h-dvh items-center justify-center bg-canvas p-6">
       <div className="w-full max-w-[320px]">
         <div className="mb-6 text-center">
-          <div className="text-sm font-semibold tracking-[0.16em] text-ink">HERMES</div>
+          <div className="text-sm font-semibold tracking-[0.16em] text-ink">STARKVISIONZ</div>
           <div className="mt-0.5 text-[10px] uppercase tracking-wider text-ink-faint">
             Project Controls
           </div>

@@ -1,5 +1,5 @@
 /**
- * Seeds the Hermes database with a realistic three-project EPC portfolio.
+ * Seeds the Project Starkvisionz database with a realistic three-project EPC portfolio.
  *
  * Everything is generated from a fixed PRNG seed, so re-running produces the
  * same portfolio. The earned-value figures are built so that the rolled-up
@@ -12,9 +12,9 @@ import path from "node:path";
 import { recalculateProject } from "../src/lib/rollup-core.mjs";
 
 const ROOT = process.cwd();
-const DB_PATH = process.env.HERMES_DB_PATH
-  ? path.resolve(process.env.HERMES_DB_PATH)
-  : path.join(ROOT, "data", "hermes.db");
+const DB_PATH = process.env.STARKVISIONZ_DB_PATH
+  ? path.resolve(process.env.STARKVISIONZ_DB_PATH)
+  : path.join(ROOT, "data", "starkvisionz.db");
 
 fs.mkdirSync(path.dirname(DB_PATH), { recursive: true });
 
@@ -1277,7 +1277,7 @@ build();
 // --------------------------------------------------------------------------
 const count = (table) => db.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get().n;
 
-console.log(`\n  Hermes database seeded → ${DB_PATH}\n`);
+console.log(`\n  Starkvisionz database seeded → ${DB_PATH}\n`);
 console.log(`    projects       ${count("projects")}`);
 console.log(`    wbs_nodes      ${count("wbs_nodes")}`);
 console.log(`    tasks          ${count("tasks")}`);

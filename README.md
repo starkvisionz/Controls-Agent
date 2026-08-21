@@ -1,14 +1,14 @@
-# Hermes — Project Controls Agent
+# Project Starkvisionz
 
 A desktop-style cockpit for EPC project controls, with an agent that reads the
 project registers directly and answers from them.
 
-Hermes is built for the way a controls lead actually works: one window, a
+Starkvisionz is built for the way a controls lead actually works: one window, a
 persistent left rail, a resizable workspace, and an agent panel that stays open
 beside whatever you are looking at. Every figure on screen is derived from the
 same tables the agent reads, so the dashboard and the agent never disagree.
 
-![The Hermes dashboard](docs/dashboard.png)
+![The Project Starkvisionz dashboard](docs/dashboard.png)
 
 ## What's in it
 
@@ -25,7 +25,7 @@ same tables the agent reads, so the dashboard and the agent never disagree.
 
 ```bash
 npm install
-npm run db:seed     # builds data/hermes.db and fills it with a demo portfolio
+npm run db:seed     # builds data/starkvisionz.db and fills it with a demo portfolio
 npm run dev         # http://localhost:3000
 ```
 
@@ -33,20 +33,20 @@ The database is a local SQLite file; there is no external service to configure.
 
 ### Before you expose it
 
-Hermes holds a project's cost, schedule and commercial position, so it runs
+Starkvisionz holds a project's cost, schedule and commercial position, so it runs
 behind a session gate. Generate a credential and put both values in
 `.env.local`:
 
 ```bash
 npm run auth:hash -- 'your password'
-# -> HERMES_AUTH_PASSWORD=scrypt$...
-#    HERMES_SESSION_SECRET=...
+# -> STARKVISIONZ_AUTH_PASSWORD=scrypt$...
+#    STARKVISIONZ_SESSION_SECRET=...
 ```
 
 With those set, every page and every API route requires a session. Without
-them, Hermes runs unauthenticated **only** in development; in production it
+them, Starkvisionz runs unauthenticated **only** in development; in production it
 returns 503 rather than serving the registers to anyone who can reach the host.
-`HERMES_AUTH_PASSWORD` also accepts a plain string if you want to get moving
+`STARKVISIONZ_AUTH_PASSWORD` also accepts a plain string if you want to get moving
 before hardening.
 
 This is single-operator access. Multiple users with per-project roles would be
@@ -97,7 +97,7 @@ src/
                           schedule/, cost/, risk/, documents/
     login/                the one page a signed-out visitor can render
     api/                  REST routes + the streaming /api/chat endpoint
-    globals.css           the Hermes design tokens
+    globals.css           the Starkvisionz design tokens
   middleware.ts           session gate in front of every page and route
   components/
     shell/                title bar, sidebar, status bar, resizable frame
@@ -165,7 +165,7 @@ provider), the write routes, and login.
 The identity those buckets key on matters more than the numbers. `X-Forwarded-For`
 is a list the client can prepend to, so keying on its leftmost value lets anyone
 mint a fresh bucket per request — that defeats a limit rather than weakening it.
-Hermes believes the header only when `HERMES_TRUSTED_PROXIES` says how many
+Starkvisionz believes the header only when `STARKVISIONZ_TRUSTED_PROXIES` says how many
 proxies sit in front, and then reads only the entry the innermost trusted proxy
 observed. With none declared, every caller shares one bucket: legitimate users
 throttle together, which is the safe direction to be wrong in. A second
@@ -173,7 +173,7 @@ instance-wide ceiling bounds the total regardless of where traffic comes from.
 
 Chat messages are capped and oversized bodies refused before buffering.
 
-**The schedule is a register, not a solver.** Hermes stores predecessors, float
+**The schedule is a register, not a solver.** Starkvisionz stores predecessors, float
 and critical-path flags but does not run CPM. Editing a forecast date does not
 move successors or recompute float, and the activity inspector says so rather
 than letting a planner assume otherwise. A real scheduling layer — or ingesting
@@ -203,7 +203,7 @@ so it exercises the local analyst and never depends on a provider.
 | `npm run typecheck` | `tsc --noEmit` |
 | `npm run lint` | ESLint over the whole tree |
 | `npm run smoke` | Assert the auth gate, validation, roll-up and streaming against a running build |
-| `npm run auth:hash -- 'pw'` | Generate `HERMES_AUTH_PASSWORD` and `HERMES_SESSION_SECRET` |
+| `npm run auth:hash -- 'pw'` | Generate `STARKVISIONZ_AUTH_PASSWORD` and `STARKVISIONZ_SESSION_SECRET` |
 
 ## Stack
 

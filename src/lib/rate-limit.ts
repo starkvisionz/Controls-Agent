@@ -72,11 +72,11 @@ export function consume(key: string, limit: Limit, now = Date.now()): RateResult
 
 /**
  * How many reverse proxies sit in front of this instance, from
- * `HERMES_TRUSTED_PROXIES`. Zero — the default — means the app is reached
+ * `STARKVISIONZ_TRUSTED_PROXIES`. Zero — the default — means the app is reached
  * directly and no forwarding header may be believed.
  */
 function trustedProxyCount(): number {
-  const raw = Number(process.env.HERMES_TRUSTED_PROXIES ?? 0);
+  const raw = Number(process.env.STARKVISIONZ_TRUSTED_PROXIES ?? 0);
   return Number.isInteger(raw) && raw > 0 ? raw : 0;
 }
 

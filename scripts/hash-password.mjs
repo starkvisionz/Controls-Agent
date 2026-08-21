@@ -1,5 +1,5 @@
 /**
- * Prints a `scrypt$salt$hash` value for HERMES_AUTH_PASSWORD, so the deployed
+ * Prints a `scrypt$salt$hash` value for STARKVISIONZ_AUTH_PASSWORD, so the deployed
  * environment never has to hold the plaintext.
  *
  *   npm run auth:hash -- 'the password'
@@ -15,5 +15,5 @@ if (!plain) {
 const salt = randomBytes(16);
 const hash = scryptSync(plain, salt, 32);
 
-console.log(`\nHERMES_AUTH_PASSWORD=scrypt$${salt.toString("hex")}$${hash.toString("hex")}`);
-console.log(`HERMES_SESSION_SECRET=${randomBytes(32).toString("hex")}\n`);
+console.log(`\nSTARKVISIONZ_AUTH_PASSWORD=scrypt$${salt.toString("hex")}$${hash.toString("hex")}`);
+console.log(`STARKVISIONZ_SESSION_SECRET=${randomBytes(32).toString("hex")}\n`);

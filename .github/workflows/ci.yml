@@ -19,8 +19,8 @@ jobs:
     env:
       # The smoke test drives a real signed-in session against the built app.
       # These are throwaway values for this run only.
-      HERMES_AUTH_PASSWORD: ci-smoke-password
-      HERMES_SESSION_SECRET: ci-only-session-secret-not-a-real-one
+      STARKVISIONZ_AUTH_PASSWORD: ci-smoke-password
+      STARKVISIONZ_SESSION_SECRET: ci-only-session-secret-not-a-real-one
       # No ANTHROPIC_API_KEY: CI exercises the local analyst path deliberately,
       # so the suite never depends on a provider or spends tokens.
 

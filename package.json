@@ -1,8 +1,8 @@
 {
-  "name": "hermes-controls-agent",
+  "name": "starkvisionz-controls-agent",
   "version": "0.1.0",
   "private": true,
-  "description": "Hermes — desktop UI for the EPC Project Controls Agent",
+  "description": "Project Starkvisionz — desktop UI for the EPC Project Controls Agent",
   "scripts": {
     "dev": "next dev -p 3000",
     "build": "next build",
@@ -10,7 +10,7 @@
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
     "db:seed": "node scripts/seed.mjs",
-    "db:reset": "rm -f data/hermes.db && npm run db:seed",
+    "db:reset": "rm -f data/starkvisionz.db && npm run db:seed",
     "auth:hash": "node scripts/hash-password.mjs",
     "smoke": "node scripts/smoke.mjs"
   },

@@ -22,4 +22,4 @@ yarn-error.log*
 .vercel
 
 # local verification helpers (not part of the app)
-.hermes-*.mjs
+.starkvisionz-*.mjs

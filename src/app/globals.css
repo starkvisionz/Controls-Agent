@@ -1,10 +1,10 @@
 @import "tailwindcss";
 
 /* ==========================================================================
-   Hermes — desktop design tokens
+   Project Starkvisionz — desktop design tokens
 
    A dark, low-chroma instrument panel. The greys carry a slight blue cast so
-   the single warm accent (Hermes orange) reads as the only "live" colour in
+   the single warm accent (Starkvisionz orange) reads as the only "live" colour in
    the interface; everything else recedes. Data colours are reserved strictly
    for meaning — never decoration.
    ========================================================================== */
@@ -28,7 +28,7 @@
   --color-ink-mute: #6c757f;      /* labels, captions */
   --color-ink-faint: #4a525b;     /* disabled, watermarks */
 
-  /* --- Accent (Hermes orange) ----------------------------------------- */
+  /* --- Accent (Starkvisionz orange) ----------------------------------------- */
   --color-accent: #f26c1d;
   --color-accent-hi: #ff8a3d;
   --color-accent-lo: #b84f11;
@@ -217,26 +217,26 @@ table,
    Motion
    ========================================================================== */
 
-@keyframes hermes-fade-up {
+@keyframes starkvisionz-fade-up {
   from { opacity: 0; transform: translateY(4px); }
   to   { opacity: 1; transform: translateY(0); }
 }
 
 .animate-in {
-  animation: hermes-fade-up 180ms ease-out both;
+  animation: starkvisionz-fade-up 180ms ease-out both;
 }
 
-@keyframes hermes-pulse {
+@keyframes starkvisionz-pulse {
   0%, 100% { opacity: 1; }
   50%      { opacity: 0.35; }
 }
 
 .animate-pulse-dot {
-  animation: hermes-pulse 1.4s ease-in-out infinite;
+  animation: starkvisionz-pulse 1.4s ease-in-out infinite;
 }
 
 /* The block that trails streaming agent text. */
-@keyframes hermes-caret {
+@keyframes starkvisionz-caret {
   0%, 45%  { opacity: 1; }
   50%, 95% { opacity: 0; }
 }
@@ -248,7 +248,7 @@ table,
   margin-left: 1px;
   vertical-align: text-bottom;
   background: var(--color-accent);
-  animation: hermes-caret 1s steps(1) infinite;
+  animation: starkvisionz-caret 1s steps(1) infinite;
 }
 
 @media (prefers-reduced-motion: reduce) {

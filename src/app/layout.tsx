@@ -2,7 +2,7 @@ import type { Metadata, Viewport } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Hermes — Project Controls",
+  title: "Project Starkvisionz",
   description:
     "Desktop cockpit for EPC project controls: earned value, schedule, cost, risk and document control, with an agent that reads the register.",
 };

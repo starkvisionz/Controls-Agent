@@ -111,7 +111,7 @@ export function TaskDetail({
         <div className="mt-4 border-t border-line pt-3">
           <div className="label mb-2">Update progress</div>
 
-          {/* Hermes stores the network but does not solve it. Saying so beats
+          {/* Starkvisionz stores the network but does not solve it. Saying so beats
               letting a planner assume successors moved when they did not. */}
           <p className="mb-3 rounded-sm border border-line bg-raised px-2 py-1.5 text-[10px] leading-relaxed text-ink-mute">
             Progress updates flow through to earned value and the project&apos;s cost

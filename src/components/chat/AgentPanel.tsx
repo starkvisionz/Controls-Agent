@@ -282,7 +282,7 @@ function Welcome({ onPick, disabled }: { onPick: (q: string) => void; disabled: 
       <div>
         <div className="mb-1 flex items-center gap-1.5">
           <Bot className="h-3.5 w-3.5 text-accent" />
-          <span className="text-xs font-medium text-ink">Hermes</span>
+          <span className="text-xs font-medium text-ink">Starkvisionz</span>
         </div>
         <p className="text-xs leading-relaxed text-ink-mute">
           I read this project&apos;s schedule, cost, risk and document registers directly. Ask me

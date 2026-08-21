@@ -61,8 +61,8 @@ async function hasValidSession(token: string | undefined, secret: string): Promi
 export async function middleware(req: NextRequest) {
   const { pathname, search } = req.nextUrl;
 
-  const password = process.env.HERMES_AUTH_PASSWORD?.trim();
-  const secret = process.env.HERMES_SESSION_SECRET?.trim();
+  const password = process.env.STARKVISIONZ_AUTH_PASSWORD?.trim();
+  const secret = process.env.STARKVISIONZ_SESSION_SECRET?.trim();
   const isProduction = process.env.NODE_ENV === "production";
 
   // Unconfigured in production: refuse outright rather than serve the project
@@ -71,8 +71,8 @@ export async function middleware(req: NextRequest) {
     return NextResponse.json(
       {
         error:
-          "Hermes is not configured for authenticated access. Set HERMES_AUTH_PASSWORD " +
-          "and HERMES_SESSION_SECRET, then restart.",
+          "Starkvisionz is not configured for authenticated access. Set STARKVISIONZ_AUTH_PASSWORD " +
+          "and STARKVISIONZ_SESSION_SECRET, then restart.",
       },
       { status: 503 }
     );

@@ -3,7 +3,7 @@
  * of `node:` imports — the middleware runs on the edge runtime, which cannot
  * resolve them.
  */
-export const SESSION_COOKIE = "hermes_session";
+export const SESSION_COOKIE = "starkvisionz_session";
 
 /** Sessions last a working day; a controls review does not outlive that. */
 export const SESSION_TTL_SECONDS = 12 * 60 * 60;

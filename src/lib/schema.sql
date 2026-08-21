@@ -1,5 +1,5 @@
 -- ============================================================================
--- Hermes — EPC Project Controls schema
+-- Project Starkvisionz — EPC Project Controls schema
 -- SQLite. Money is stored in whole USD; durations in days; dates as ISO-8601.
 -- ============================================================================
 

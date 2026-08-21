@@ -7,16 +7,16 @@ import path from "node:path";
  * every hot reload, so the connection is parked on globalThis to avoid leaking
  * file handles and re-running the schema on each edit.
  */
-const globalForDb = globalThis as unknown as { hermesDb?: Database.Database };
+const globalForDb = globalThis as unknown as { starkvisionzDb?: Database.Database };
 
 export function dbPath(): string {
-  const configured = process.env.HERMES_DB_PATH;
+  const configured = process.env.STARKVISIONZ_DB_PATH;
   if (configured && configured.trim()) return path.resolve(configured.trim());
-  return path.join(process.cwd(), "data", "hermes.db");
+  return path.join(process.cwd(), "data", "starkvisionz.db");
 }
 
 export function getDb(): Database.Database {
-  if (globalForDb.hermesDb) return globalForDb.hermesDb;
+  if (globalForDb.starkvisionzDb) return globalForDb.starkvisionzDb;
 
   const file = dbPath();
   fs.mkdirSync(path.dirname(file), { recursive: true });
@@ -26,7 +26,7 @@ export function getDb(): Database.Database {
   db.pragma("foreign_keys = ON");
   applySchema(db);
 
-  globalForDb.hermesDb = db;
+  globalForDb.starkvisionzDb = db;
   return db;
 }
 

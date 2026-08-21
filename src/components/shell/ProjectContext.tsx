@@ -24,7 +24,7 @@ type ProjectContextValue = {
 
 const Ctx = createContext<ProjectContextValue | null>(null);
 
-const STORAGE_KEY = "hermes.activeProject";
+const STORAGE_KEY = "starkvisionz.activeProject";
 
 /**
  * Holds the portfolio and the project the whole shell is pointed at. Every

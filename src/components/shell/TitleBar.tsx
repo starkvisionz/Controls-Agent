@@ -49,7 +49,7 @@ export function TitleBar({
       </div>
 
       <div className="ml-1 flex items-baseline gap-1.5">
-        <span className="text-sm font-semibold tracking-[0.16em] text-ink">HERMES</span>
+        <span className="text-sm font-semibold tracking-[0.16em] text-ink">STARKVISIONZ</span>
         <span className="text-[10px] uppercase tracking-wider text-ink-faint">
           Project Controls
         </span>

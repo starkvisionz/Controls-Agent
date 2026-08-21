@@ -12,8 +12,8 @@ import { LoadingPane, StateMessage } from "@/components/ui/Controls";
 
 /** Persisted separately so each toggle is its own value, not a parsed blob. */
 const CHROME_KEYS = {
-  collapsed: "hermes.chrome.collapsed",
-  agentOpen: "hermes.chrome.agentOpen",
+  collapsed: "starkvisionz.chrome.collapsed",
+  agentOpen: "starkvisionz.chrome.agentOpen",
 } as const;
 
 /**
@@ -59,7 +59,7 @@ function ShellFrame({ children, authEnforced }: { children: ReactNode; authEnfor
   const [agentSource, setAgentSource] = useState<"claude" | "local" | null>(null);
 
   const { defaultLayout, onLayoutChanged } = useDefaultLayout({
-    id: "hermes.main",
+    id: "starkvisionz.main",
     storage: safeStorage,
     panelIds: ["workspace", "agent"],
     onlySaveAfterUserInteractions: true,

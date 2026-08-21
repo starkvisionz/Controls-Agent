@@ -15,10 +15,10 @@
  */
 
 const BASE = process.argv[2] ?? "http://localhost:3000";
-const PASSWORD = process.env.HERMES_AUTH_PASSWORD;
+const PASSWORD = process.env.STARKVISIONZ_AUTH_PASSWORD;
 
 if (!PASSWORD || PASSWORD.startsWith("scrypt$")) {
-  console.error("smoke: set HERMES_AUTH_PASSWORD to the plaintext password for this run");
+  console.error("smoke: set STARKVISIONZ_AUTH_PASSWORD to the plaintext password for this run");
   process.exit(1);
 }
 
@@ -82,13 +82,13 @@ const login = await get("/api/auth/login", {
 check("correct password accepted", login.status === 200);
 
 const cookie = (login.headers.get("set-cookie") ?? "").split(";")[0];
-check("session cookie issued", cookie.startsWith("hermes_session="), cookie.split("=")[0]);
+check("session cookie issued", cookie.startsWith("starkvisionz_session="), cookie.split("=")[0]);
 
 const authed = { ...json, cookie };
 check("read API allowed with session", (await get("/api/projects", { headers: authed })).status === 200);
 check(
   "forged cookie refused",
-  (await get("/api/projects", { headers: { cookie: "hermes_session=1.9999999999.forged" } })).status === 401
+  (await get("/api/projects", { headers: { cookie: "starkvisionz_session=1.9999999999.forged" } })).status === 401
 );
 
 // ---------------------------------------------------------------------------

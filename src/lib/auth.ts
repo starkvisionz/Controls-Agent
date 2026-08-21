@@ -4,7 +4,7 @@ import { SESSION_COOKIE, SESSION_TTL_SECONDS } from "@/lib/session-cookie";
 /**
  * Single-operator authentication.
  *
- * Hermes holds a project's cost, schedule and commercial position — the kind of
+ * Starkvisionz holds a project's cost, schedule and commercial position — the kind of
  * data that should never be readable, and certainly never writable, by whoever
  * happens to find the host. This module gates the whole application behind one
  * operator credential, which is the right shape for a single-instance install.
@@ -41,8 +41,8 @@ function envValue(name: string): string | undefined {
  * is protected but is not.
  */
 export function authMode(): AuthMode {
-  const password = envValue("HERMES_AUTH_PASSWORD");
-  const secret = envValue("HERMES_SESSION_SECRET");
+  const password = envValue("STARKVISIONZ_AUTH_PASSWORD");
+  const secret = envValue("STARKVISIONZ_SESSION_SECRET");
   const isProduction = process.env.NODE_ENV === "production";
 
   if (!password) {
@@ -50,12 +50,12 @@ export function authMode(): AuthMode {
       ? {
           kind: "misconfigured",
           reason:
-            "HERMES_AUTH_PASSWORD is not set. Hermes will not serve project data " +
+            "STARKVISIONZ_AUTH_PASSWORD is not set. Starkvisionz will not serve project data " +
             "unauthenticated in production.",
         }
       : {
           kind: "open",
-          reason: "HERMES_AUTH_PASSWORD is not set — running unauthenticated for local development.",
+          reason: "STARKVISIONZ_AUTH_PASSWORD is not set — running unauthenticated for local development.",
         };
   }
 
@@ -63,11 +63,11 @@ export function authMode(): AuthMode {
     return isProduction
       ? {
           kind: "misconfigured",
-          reason: "HERMES_SESSION_SECRET is not set. Session cookies cannot be signed.",
+          reason: "STARKVISIONZ_SESSION_SECRET is not set. Session cookies cannot be signed.",
         }
       : {
           kind: "open",
-          reason: "HERMES_SESSION_SECRET is not set — running unauthenticated for local development.",
+          reason: "STARKVISIONZ_SESSION_SECRET is not set — running unauthenticated for local development.",
         };
   }
 
@@ -97,12 +97,12 @@ function safeEqual(a: string, b: string): boolean {
 /**
  * Checks a submitted password.
  *
- * `HERMES_AUTH_PASSWORD` may hold either a `scrypt$<saltHex>$<hashHex>` digest
+ * `STARKVISIONZ_AUTH_PASSWORD` may hold either a `scrypt$<saltHex>$<hashHex>` digest
  * (preferred — see `npm run auth:hash`) or a plain string, so an operator can
  * get running quickly and harden later without a code change.
  */
 export function verifyPassword(submitted: string): boolean {
-  const configured = envValue("HERMES_AUTH_PASSWORD");
+  const configured = envValue("STARKVISIONZ_AUTH_PASSWORD");
   if (!configured) return false;
 
   if (configured.startsWith("scrypt$")) {
@@ -120,7 +120,7 @@ export function verifyPassword(submitted: string): boolean {
   return safeEqual(submitted, configured);
 }
 
-/** Produces the `scrypt$salt$hash` form for HERMES_AUTH_PASSWORD. */
+/** Produces the `scrypt$salt$hash` form for STARKVISIONZ_AUTH_PASSWORD. */
 export function hashPassword(plain: string): string {
   const salt = randomBytes(16);
   const hash = scryptSync(plain, salt, 32);
