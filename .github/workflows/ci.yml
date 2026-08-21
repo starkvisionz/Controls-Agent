@@ -1,0 +1,72 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# A new push supersedes an in-flight run for the same ref.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: typecheck, lint, build, smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    env:
+      # The smoke test drives a real signed-in session against the built app.
+      # These are throwaway values for this run only.
+      STARKVISIONZ_AUTH_PASSWORD: ci-smoke-password
+      STARKVISIONZ_SESSION_SECRET: ci-only-session-secret-not-a-real-one
+      # No ANTHROPIC_API_KEY: CI exercises the local analyst path deliberately,
+      # so the suite never depends on a provider or spends tokens.
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      # `npm ci` needs the lockfile to match package.json, which also catches a
+      # dependency added without committing the lock.
+      - name: Install
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Build
+        run: npm run build
+
+      - name: Seed the database
+        run: npm run db:seed
+
+      # The redirect matters: a backgrounded process that inherits the step's
+      # stdout keeps that pipe open, and the runner waits on it, so the step
+      # hangs until the job timeout even though the server started fine.
+      - name: Start the production server
+        run: |
+          npx next start -p 3000 > server.log 2>&1 &
+          echo "$!" > .server.pid
+          npx wait-on --timeout 60000 http://localhost:3000/login
+        env:
+          NODE_ENV: production
+
+      - name: Smoke test
+        run: npm run smoke -- http://localhost:3000
+
+      - name: Server log
+        if: failure()
+        run: cat server.log || true
+
+      - name: Stop the server
+        if: always()
+        run: kill "$(cat .server.pid)" 2>/dev/null || true
