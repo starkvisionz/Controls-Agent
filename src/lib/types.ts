@@ -155,15 +155,27 @@ export type ProjectDocument = {
 export type ChangeOrder = {
   id: string;
   project_id: string;
+  /** The control account an approved order lands in. Null until it is priced. */
+  cost_account_id: string | null;
   code: string;
+  client_ref: string;
   title: string;
   origin: string;
   status: string;
   cost_impact: number;
+  /** Recorded, and deliberately not applied to any forecast date. */
   schedule_impact_days: number;
   raised_date: string;
+  submitted_date: string | null;
   decision_date: string | null;
+  owner: string;
   description: string;
+};
+
+/** A register row with the account it is allocated to already resolved. */
+export type ChangeOrderRow = ChangeOrder & {
+  account_code: string | null;
+  account_name: string | null;
 };
 
 export type ChatMessage = {

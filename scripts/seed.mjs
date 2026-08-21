@@ -11,6 +11,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { recalculateProject } from "../src/lib/rollup-core.mjs";
 import { insertUser, normaliseEmail, replaceGrants } from "../src/lib/accounts-core.mjs";
+import { applyChangeOrders } from "../src/lib/change-orders-core.mjs";
 
 const ROOT = process.cwd();
 const DB_PATH = process.env.STARKVISIONZ_DB_PATH
@@ -323,10 +324,12 @@ const insertDoc = db.prepare(`
     @returned_date, @transmittal_no, @file_name, @file_size_kb, @format, @notes)`);
 
 const insertChangeOrder = db.prepare(`
-  INSERT INTO change_orders (id, project_id, code, title, origin, status, cost_impact,
-    schedule_impact_days, raised_date, decision_date, description)
-  VALUES (@id, @project_id, @code, @title, @origin, @status, @cost_impact,
-    @schedule_impact_days, @raised_date, @decision_date, @description)`);
+  INSERT INTO change_orders (id, project_id, cost_account_id, code, client_ref, title, origin,
+    status, cost_impact, schedule_impact_days, raised_date, submitted_date, decision_date,
+    owner, description)
+  VALUES (@id, @project_id, @cost_account_id, @code, @client_ref, @title, @origin,
+    @status, @cost_impact, @schedule_impact_days, @raised_date, @submitted_date, @decision_date,
+    @owner, @description)`);
 
 const insertConversation = db.prepare(`
   INSERT INTO conversations (id, project_id, title) VALUES (?, ?, ?)`);
@@ -1169,28 +1172,114 @@ const CHANGE_LIBRARY = [
   ["Temporary power upgrade for construction", "Internal", "Peak construction load exceeded the temporary supply capacity."],
 ];
 
-function seedChangeOrders(p, elapsed) {
-  const count = p.code === "GC-4410" ? 9 : p.code === "NV-2208" ? 6 : 4;
-  for (let i = 0; i < count; i++) {
-    const [title, origin, description] = CHANGE_LIBRARY[i % CHANGE_LIBRARY.length];
-    const status = pick(["trend", "submitted", "approved", "approved", "rejected"]);
-    const isSaving = title.includes("value engineering");
-    const raised = addDays(p.start_date, intBetween(30, Math.max(45, elapsed)));
+const CHANGE_OWNERS = [
+  "M. Delacroix",
+  "S. Alvarez",
+  "R. Okonkwo",
+  "J. Lindqvist",
+  "P. Naidoo",
+];
+
+/**
+ * The register that the budgets come from.
+ *
+ * Each control account was drafted with an intended `approved_changes` figure,
+ * and every dollar of it is now written as an approved change order allocated
+ * to that account. `applyChangeOrders` then re-derives the budgets from those
+ * orders — landing on the same numbers, but by the same path a live approval
+ * takes. Seeding the two independently is what would let the register and the
+ * budget disagree from the first row.
+ *
+ * Pending and rejected orders are added on top. They carry exposure, not money,
+ * so they change no budget.
+ */
+function seedChangeOrders(p, elapsed, accounts) {
+  const raisedOn = () => addDays(p.start_date, intBetween(30, Math.max(45, elapsed)));
+  let sequence = 0;
+
+  const next = () => {
+    sequence += 1;
+    return {
+      id: `${p.id}-co-${sequence}`,
+      code: `CO-${String(sequence).padStart(3, "0")}`,
+    };
+  };
+
+  const library = (i) => CHANGE_LIBRARY[i % CHANGE_LIBRARY.length];
+
+  // 1. The approved orders, one per account carrying a change. Their values sum
+  //    to exactly what that account's budget was drafted to hold.
+  const changed = accounts.filter((a) => Math.abs(a.approved_changes) > 0);
+  let libraryIndex = 0;
+
+  for (const account of changed) {
+    const isSaving = account.approved_changes < 0;
+    const [, origin, description] = library(libraryIndex);
+    // A saving is value engineering, whatever the library entry says.
+    const title = isSaving
+      ? `${account.name} — value engineering`
+      : `${account.name} — ${library(libraryIndex)[0].toLowerCase()}`;
+    libraryIndex += 1;
+
+    const raised = raisedOn();
+    const submitted = addDays(raised, intBetween(5, 24));
+    const { id, code } = next();
 
     insertChangeOrder.run({
-      id: `${p.id}-co-${i + 1}`,
+      id,
       project_id: p.id,
-      code: `CO-${String(i + 1).padStart(3, "0")}`,
+      cost_account_id: account.id,
+      code,
+      client_ref: origin === "Client" ? `${p.code}-VO-${String(sequence).padStart(3, "0")}` : "",
       title,
       origin,
-      status,
-      cost_impact: round(p.bac * between(0.001, 0.014)) * (isSaving ? -1 : 1),
+      status: "approved",
+      cost_impact: account.approved_changes,
       schedule_impact_days: isSaving ? -intBetween(0, 10) : intBetween(0, 28),
       raised_date: raised,
-      decision_date: status === "trend" || status === "submitted" ? null : addDays(raised, intBetween(14, 70)),
+      submitted_date: submitted,
+      decision_date: addDays(submitted, intBetween(9, 55)),
+      owner: pick(CHANGE_OWNERS),
       description,
     });
   }
+
+  // 2. Open and rejected orders — the commercial position that is not yet money.
+  const openCount = p.code === "GC-4410" ? 5 : p.code === "NV-2208" ? 3 : 2;
+  for (let i = 0; i < openCount; i++) {
+    const [title, origin, description] = library(libraryIndex);
+    libraryIndex += 1;
+
+    const status = pick(["trend", "trend", "submitted", "submitted", "rejected"]);
+    const isSaving = title.includes("value engineering");
+    const raised = raisedOn();
+    const submitted = status === "trend" ? null : addDays(raised, intBetween(5, 24));
+    const { id, code } = next();
+
+    insertChangeOrder.run({
+      id,
+      project_id: p.id,
+      // Priced against an account even while open, so approving one on the
+      // Changes page has somewhere to land without further data entry.
+      cost_account_id: pick(accounts).id,
+      code,
+      client_ref: origin === "Client" ? `${p.code}-VO-${String(sequence).padStart(3, "0")}` : "",
+      title,
+      origin,
+      status,
+      cost_impact: round(p.bac * between(0.001, 0.012)) * (isSaving ? -1 : 1),
+      schedule_impact_days: isSaving ? -intBetween(0, 10) : intBetween(0, 28),
+      raised_date: raised,
+      submitted_date: submitted,
+      decision_date: status === "rejected" ? addDays(submitted ?? raised, intBetween(9, 55)) : null,
+      owner: pick(CHANGE_OWNERS),
+      description,
+    });
+  }
+
+  // 3. Derive the budgets from what was just written. The figures should not
+  //    move — if they do, the register and the budget had disagreed.
+  applyChangeOrders(db, p.id);
 }
 
 // --------------------------------------------------------------------------
@@ -1340,10 +1429,10 @@ const build = db.transaction(() => {
     // Reset per project: otherwise adding a risk to one project silently
     // shifts every figure in the next one.
     _seed = seedFor(p.code);
-    const { level2, totals, elapsed } = seedProject(p);
+    const { level2, accounts, totals, elapsed } = seedProject(p);
     seedRisks(p, level2, elapsed);
     seedDocuments(p, level2, elapsed);
-    seedChangeOrders(p, elapsed);
+    seedChangeOrders(p, elapsed, accounts);
     seedConversation(p, totals);
   }
 });

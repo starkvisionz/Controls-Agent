@@ -166,6 +166,124 @@ export const chatRequestSchema = z
 export type ChatRequest = z.infer<typeof chatRequestSchema>;
 
 // ---------------------------------------------------------------------------
+// Change orders
+// ---------------------------------------------------------------------------
+
+export const CHANGE_STATUSES = ["trend", "submitted", "approved", "rejected"] as const;
+export const CHANGE_ORIGINS = ["Client", "Internal", "Vendor", "Site Condition"] as const;
+
+/** A decided order — approved or rejected — is one the client has ruled on. */
+export const DECIDED_STATUSES = ["approved", "rejected"] as const;
+
+/**
+ * Cost impact is signed: a value-engineering order is a saving, so the money
+ * bound here is symmetric rather than the non-negative `money` used for budgets.
+ */
+const changeValue = z
+  .number({ message: "must be a number" })
+  .finite("must be a finite number")
+  .min(-1e11, "is implausibly large")
+  .max(1e11, "is implausibly large");
+
+const changeOrderFields = {
+  cost_account_id: z.string().trim().min(1).max(120).nullish(),
+  client_ref: z.string().trim().max(60).optional(),
+  title: z.string().trim().min(1, "is required").max(160),
+  origin: z.enum(CHANGE_ORIGINS, {
+    message: `must be one of: ${CHANGE_ORIGINS.join(", ")}`,
+  }),
+  status: z.enum(CHANGE_STATUSES, {
+    message: `must be one of: ${CHANGE_STATUSES.join(", ")}`,
+  }),
+  cost_impact: changeValue,
+  schedule_impact_days: days("schedule impact"),
+  raised_date: isoDate,
+  submitted_date: isoDate.nullish(),
+  decision_date: isoDate.nullish(),
+  owner: z.string().trim().max(80).optional(),
+  description: z.string().trim().max(2000).optional(),
+};
+
+export const changeOrderCreateSchema = z
+  .object({
+    ...changeOrderFields,
+    // A new order starts open. Raising one straight into "approved" would skip
+    // the record of it ever having been asked for.
+    status: z.enum(["trend", "submitted"], { message: "a new order starts as trend or submitted" }),
+    cost_impact: changeValue.optional(),
+    schedule_impact_days: days("schedule impact").optional(),
+    decision_date: z.null().optional(),
+  })
+  .strict();
+
+export const changeOrderPatchSchema = z
+  .object({
+    cost_account_id: changeOrderFields.cost_account_id,
+    client_ref: changeOrderFields.client_ref,
+    title: changeOrderFields.title.optional(),
+    origin: changeOrderFields.origin.optional(),
+    status: changeOrderFields.status.optional(),
+    cost_impact: changeValue.optional(),
+    schedule_impact_days: days("schedule impact").optional(),
+    submitted_date: changeOrderFields.submitted_date,
+    decision_date: changeOrderFields.decision_date,
+    owner: changeOrderFields.owner,
+    description: changeOrderFields.description,
+  })
+  .strict()
+  .refine((patch) => Object.keys(patch).length > 0, "no changes supplied");
+
+export type ChangeOrderCreate = z.infer<typeof changeOrderCreateSchema>;
+export type ChangeOrderPatch = z.infer<typeof changeOrderPatchSchema>;
+
+/**
+ * The rules that need the stored row as well as the patch, so they cannot live
+ * in the schema. Shared with the UI so the form refuses exactly what the route
+ * would, rather than discovering it on submit.
+ */
+export function changeOrderRules(order: {
+  status: string;
+  cost_account_id: string | null;
+  cost_impact: number;
+  raised_date: string;
+  submitted_date: string | null;
+  decision_date: string | null;
+}): FieldError[] {
+  const errors: FieldError[] = [];
+  const decided = (DECIDED_STATUSES as readonly string[]).includes(order.status);
+
+  // Approving is the act that moves a budget, so it has to say which budget.
+  if (order.status === "approved" && !order.cost_account_id) {
+    errors.push({
+      field: "cost_account_id",
+      message: "is required before an order can be approved — it decides which budget moves",
+    });
+  }
+
+  if (decided && !order.decision_date) {
+    errors.push({ field: "decision_date", message: "is required once an order is decided" });
+  }
+  if (!decided && order.decision_date) {
+    errors.push({
+      field: "decision_date",
+      message: "cannot be set while the order is still open",
+    });
+  }
+
+  if (order.submitted_date && order.submitted_date < order.raised_date) {
+    errors.push({ field: "submitted_date", message: "cannot precede the date it was raised" });
+  }
+  if (order.decision_date && order.decision_date < order.raised_date) {
+    errors.push({ field: "decision_date", message: "cannot precede the date it was raised" });
+  }
+  if (order.decision_date && order.submitted_date && order.decision_date < order.submitted_date) {
+    errors.push({ field: "decision_date", message: "cannot precede the date it was submitted" });
+  }
+
+  return errors;
+}
+
+// ---------------------------------------------------------------------------
 // Accounts
 // ---------------------------------------------------------------------------
 

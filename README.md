@@ -16,10 +16,13 @@ same tables the agent reads, so the dashboard and the agent never disagree.
 |---|---|
 | **Dashboard** | Earned-value KPIs, the S-curve (PV / EV / AC with forecast), SPI and CPI trend, cost by phase, milestones, critical path, and an alert roll-up |
 | **Schedule** | WBS tree with a Gantt timeline — baseline against forecast, critical-path marking, milestone diamonds, zoom, filters, and an editable activity inspector |
-| **Cost** | Control accounts with budget / committed / actual / earned / CPI / EAC / VAC, a diverging variance chart, period cash flow, the transaction ledger, and the change-order log |
+| **Cost** | Control accounts with budget / committed / actual / earned / CPI / EAC / VAC, a diverging variance chart, period cash flow and the transaction ledger |
 | **Risk** | 5×5 probability-impact matrix with click-through drilldown, exposure by category, and an editable risk inspector with mitigation tracking |
+| **Changes** | The change-order register — trends, submissions, approvals — with the budget movement each one causes, approval turnaround, and where the change is coming from |
 | **Documents** | Deliverable register with issue status, client review codes, overdue tracking, and approval progress by discipline |
 | **Agent** | A streaming chat panel that answers from the live database — cost variance, critical path, risk exposure, forecast basis, and recommendations |
+
+![The Changes view — the register, and the budget it moves](docs/changes.png)
 
 ## Running it
 
@@ -54,12 +57,15 @@ who already has it, and every account after that by an administrator.
 Accounts are local — stored in the same SQLite file, passwords hashed with
 scrypt — and carry one of four roles:
 
-| Role | Read | Schedule | Documents | Cost | Risk | Accounts |
+| Role | Read | Schedule | Documents | Cost & changes | Risk | Accounts |
 |---|:-:|:-:|:-:|:-:|:-:|:-:|
 | **Viewer** | ● | | | | | |
 | **Planner** | ● | ● | ● | | | |
 | **Controls lead** | ● | ● | ● | ● | ● | |
 | **Administrator** | ● | ● | ● | ● | ● | ● |
+
+Change orders sit under cost: approving one moves a control-account budget, so
+it is the same permission that governs the cost position.
 
 Reading includes the agent panel: it answers from the whole project, so asking
 it something needs the same access as opening the register.
@@ -112,7 +118,10 @@ cannot cite a number the tables do not support.
 | **AB-1750** Scotford Blue Hydrogen | $158M Cost-Plus | Engineering | 0.972 | 0.938 | Early, with cost pressure already |
 
 The generator is deterministic — a fixed PRNG seed per project code — so the
-numbers are the same on every re-seed. Because earned value is derived from
+numbers are the same on every re-seed. Change orders are seeded the same way the
+app writes them: the approved ones sum to exactly what each control account's
+budget was drafted to hold, and the budgets are then derived from that register,
+so every dollar of approved change traces to an order from the first row. Because earned value is derived from
 activity progress rather than written directly, the seeder hits each project's
 target SPI by scaling the *activity percentages* and iterating the same roll-up
 the API runs, then shapes actual cost around the resulting earned value to hit
@@ -143,12 +152,13 @@ src/
     shell/                title bar, sidebar, status bar, resizable frame
     charts/               Recharts wrappers over one shared chart theme
     chat/                 agent panel, SSE client, markdown renderer
-    dashboard/ schedule/ cost/ risk/ documents/ users/
+    dashboard/ schedule/ cost/ risk/ changes/ documents/ users/
     ui/                   panels, tables, badges, stat tiles, controls
   lib/
     schema.sql            the full EPC schema
     db.ts queries.ts      connection and the typed query + metrics layer
     rollup-core.mjs       schedule -> cost roll-up, shared with the seeder
+    change-orders-core.mjs  change register -> control-account budgets
     validation.ts         Zod schemas shared by the UI and the API
     rbac.ts               roles, permissions, and the one `can()` they answer
     auth.ts guard.ts      sessions, and the check every route runs
@@ -183,6 +193,31 @@ comes from the ledger, not from progress.
 
 `projectMetrics()` in `src/lib/queries.ts` is the single definition of SPI, CPI,
 EAC, ETC, VAC and TCPI on top of that roll-up.
+
+**The change register is where budgets come from.**
+`src/lib/change-orders-core.mjs` owns the step above that roll-up:
+
+```
+change order approved (allocated to a control account)
+  -> cost_accounts.approved_changes  (SUM of approved orders on that account)
+  -> cost_accounts.current_budget    (original + approved)
+  -> recalculateProject()            -> earned value, EAC, the EVM period
+```
+
+Nothing else writes `approved_changes` or `current_budget`. It re-derives from
+scratch rather than applying deltas, so an order that is rejected after approval
+— or moved to a different account — releases the money it was holding instead of
+stranding it. Approving therefore requires an allocation: you cannot add to a
+budget without saying which budget, and the account named must belong to the
+same project.
+
+Pending change is kept out of the budget on purpose. A trend is exposure the
+project carries, not money it has, and the two never share a tile or a total —
+that is how a forecast quietly absorbs a claim nobody has agreed to pay.
+
+Schedule impact is recorded and **not** applied to forecast dates, for the same
+reason the schedule is a register rather than a solver: moving a finish date on
+approval would assert an entitlement no critical path produced.
 
 **Authorisation is asked once, about a project.** `src/lib/rbac.ts` holds the
 role-to-permission table and a single `can(principal, permission, projectId)`.
@@ -252,7 +287,9 @@ calculated dates from P6/MSP — is the next step for that view.
 seed, then `scripts/smoke.mjs` against the built server.
 
 The smoke test asserts the things this README claims rather than leaving them
-as assertions in prose — that a schedule edit moves project EVM, that no page,
+as assertions in prose — that a schedule edit moves project EVM, that approving a
+change order moves the budget it names and rejecting it gives that money back,
+that no page,
 read or write is reachable without a session, that a forged cookie is refused,
 that each role is allowed exactly what its permissions say and refused the
 rest, that a scoped account cannot see or reach a project it was not granted,
@@ -272,7 +309,7 @@ so it exercises the local analyst and never depends on a provider.
 | `npm run db:reset` | Delete and rebuild it |
 | `npm run typecheck` | `tsc --noEmit` |
 | `npm run lint` | ESLint over the whole tree |
-| `npm run smoke` | Assert the auth gate, validation, roll-up and streaming against a running build |
+| `npm run smoke` | Assert the auth gate, roles, roll-up, change-order chain, validation and streaming against a running build |
 | `npm run user -- list` | Accounts, roles and project scope |
 | `npm run user -- add` | Create an account — the bootstrap path for the first one |
 | `npm run user -- secret` | Generate a `STARKVISIONZ_SESSION_SECRET` |

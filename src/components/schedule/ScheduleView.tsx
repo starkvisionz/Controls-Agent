@@ -26,7 +26,7 @@ type Filter = "all" | "critical" | "slipping" | "in-progress" | "milestones";
 const ZOOM_STEPS = [0.55, 0.9, 1.5, 2.6, 4.5];
 
 export function ScheduleView() {
-  const { activeProjectId } = useProjects();
+  const { activeProjectId, refresh } = useProjects();
   const { data, loading, error } = useResource<SchedulePayload>(
     activeProjectId ? `/api/projects/${activeProjectId}/schedule` : null
   );
@@ -125,6 +125,10 @@ export function ScheduleView() {
   const applyEdit = (task: Task) => {
     setOverrides((prev) => ({ ...prev, [task.id]: task }));
     setSelected(task);
+    // The write moved earned value, SPI and the forecast. The status bar and
+    // the project switcher render from the portfolio, so they have to re-read
+    // or they keep quoting the figures from page load.
+    refresh();
   };
 
   if (loading) return <LoadingPane label="Loading schedule" />;

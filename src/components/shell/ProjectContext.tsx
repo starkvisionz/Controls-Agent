@@ -24,6 +24,17 @@ type ProjectContextValue = {
   activeProject: ProjectWithMetrics | null;
   activeProjectId: string | null;
   setActiveProjectId: (id: string) => void;
+  /**
+   * Re-reads the portfolio.
+   *
+   * The status bar and the project switcher render from this context, so any
+   * write that moves project metrics — activity progress, an approved change
+   * order — has to call this or the chrome keeps quoting the figures from page
+   * load. A view that shows a number moving while the status bar underneath it
+   * does not is the same "two sets of figures" problem the roll-up exists to
+   * prevent, just moved into the client.
+   */
+  refresh: () => void;
   loading: boolean;
   error: string | null;
 };
@@ -42,6 +53,7 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
   const [activeProjectId, setActiveId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [nonce, setNonce] = useState(0);
 
   useEffect(() => {
     let cancelled = false;
@@ -55,10 +67,15 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
         if (cancelled) return;
         setProjects(list);
 
-        const remembered =
-          typeof window !== "undefined" ? window.localStorage.getItem(STORAGE_KEY) : null;
-        const initial = list.find((p) => p.id === remembered) ?? list[0];
-        setActiveId(initial?.id ?? null);
+        // Only choose a project on the first load. A refresh must not pull the
+        // user back to a different project mid-edit.
+        setActiveId((current) => {
+          if (current && list.some((p) => p.id === current)) return current;
+          const remembered =
+            typeof window !== "undefined" ? window.localStorage.getItem(STORAGE_KEY) : null;
+          return (list.find((p) => p.id === remembered) ?? list[0])?.id ?? null;
+        });
+        setError(null);
         setLoading(false);
       })
       .catch((err: unknown) => {
@@ -70,7 +87,9 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [nonce]);
+
+  const refresh = useCallback(() => setNonce((n) => n + 1), []);
 
   const setActiveProjectId = useCallback((id: string) => {
     setActiveId(id);
@@ -87,10 +106,11 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
       activeProject: projects.find((p) => p.id === activeProjectId) ?? null,
       activeProjectId,
       setActiveProjectId,
+      refresh,
       loading,
       error,
     }),
-    [projects, activeProjectId, setActiveProjectId, loading, error]
+    [projects, activeProjectId, setActiveProjectId, refresh, loading, error]
   );
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
