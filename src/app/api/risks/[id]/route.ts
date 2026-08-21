@@ -1,24 +1,11 @@
 import { NextResponse } from "next/server";
-import { one, run } from "@/lib/db";
+import { clientKey, consume, LIMITS, tooManyRequests } from "@/lib/rate-limit";
+import { getDb, one } from "@/lib/db";
+import { riskPatchSchema, toFieldErrors } from "@/lib/validation";
 import type { Risk } from "@/lib/types";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-
-const EDITABLE = new Set([
-  "status",
-  "probability",
-  "impact",
-  "owner",
-  "response_strategy",
-  "mitigation_plan",
-  "mitigation_progress",
-  "cost_impact",
-  "schedule_impact_days",
-  "review_date",
-  "residual_probability",
-  "residual_impact",
-]);
 
 export async function GET(_req: Request, ctx: { params: Promise<{ id: string }> }) {
   const { id } = await ctx.params;
@@ -29,30 +16,48 @@ export async function GET(_req: Request, ctx: { params: Promise<{ id: string }> 
 
 export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }> }) {
   const { id } = await ctx.params;
-  if (!one<Risk>(`SELECT * FROM risks WHERE id = ?`, [id])) {
+
+  const gate = consume(clientKey(req, "write"), LIMITS.write);
+  if (!gate.allowed) return tooManyRequests(gate.retryAfterSeconds);
+  if (!one<Risk>(`SELECT id FROM risks WHERE id = ?`, [id])) {
     return NextResponse.json({ error: "Risk not found" }, { status: 404 });
   }
 
-  const body = (await req.json()) as Record<string, unknown>;
-  const updates = Object.entries(body).filter(([key]) => EDITABLE.has(key));
-  if (updates.length === 0) {
-    return NextResponse.json({ error: "No editable fields supplied" }, { status: 400 });
+  let raw: unknown;
+  try {
+    raw = await req.json();
+  } catch {
+    return NextResponse.json({ error: "Request body must be JSON" }, { status: 400 });
   }
 
-  run(
-    `UPDATE risks SET ${updates.map(([k]) => `${k} = ?`).join(", ")} WHERE id = ?`,
-    [...updates.map(([, v]) => v), id]
-  );
+  const parsed = riskPatchSchema.safeParse(raw);
+  if (!parsed.success) {
+    return NextResponse.json(
+      { error: "Invalid risk update", fields: toFieldErrors(parsed.error) },
+      { status: 422 }
+    );
+  }
 
-  // Severity and expected value are derived — never trust them from the client.
-  run(
-    `UPDATE risks
-        SET severity = probability * impact,
-            expected_value = CASE WHEN status = 'closed' THEN 0
-                                  ELSE cost_impact * (probability / 5.0) END
-      WHERE id = ?`,
-    [id]
-  );
+  const db = getDb();
+  const entries = Object.entries(parsed.data);
+
+  const write = db.transaction(() => {
+    db.prepare(
+      `UPDATE risks SET ${entries.map(([k]) => `${k} = ?`).join(", ")} WHERE id = ?`
+    ).run(...entries.map(([, v]) => v as never), id);
+
+    // Severity and exposure are derived from the score — never accepted from
+    // the client, so they cannot be set to something the score contradicts.
+    db.prepare(
+      `UPDATE risks
+          SET severity = probability * impact,
+              expected_value = CASE WHEN status = 'closed' THEN 0
+                                    ELSE cost_impact * (probability / 5.0) END
+        WHERE id = ?`
+    ).run(id);
+  });
+
+  write();
 
   return NextResponse.json({ risk: one<Risk>(`SELECT * FROM risks WHERE id = ?`, [id]) });
 }

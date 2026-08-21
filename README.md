@@ -29,8 +29,28 @@ npm run db:seed     # builds data/hermes.db and fills it with a demo portfolio
 npm run dev         # http://localhost:3000
 ```
 
-That's the whole setup. The database is a local SQLite file; there is no
-external service to configure.
+The database is a local SQLite file; there is no external service to configure.
+
+### Before you expose it
+
+Hermes holds a project's cost, schedule and commercial position, so it runs
+behind a session gate. Generate a credential and put both values in
+`.env.local`:
+
+```bash
+npm run auth:hash -- 'your password'
+# -> HERMES_AUTH_PASSWORD=scrypt$...
+#    HERMES_SESSION_SECRET=...
+```
+
+With those set, every page and every API route requires a session. Without
+them, Hermes runs unauthenticated **only** in development; in production it
+returns 503 rather than serving the registers to anyone who can reach the host.
+`HERMES_AUTH_PASSWORD` also accepts a plain string if you want to get moving
+before hardening.
+
+This is single-operator access. Multiple users with per-project roles would be
+a larger change and is not attempted here.
 
 ### The agent
 
@@ -55,13 +75,16 @@ cannot cite a number the tables do not support.
 | Project | Contract | Phase | SPI | CPI | Reads as |
 |---|---|---|---|---|---|
 | **GC-4410** Gulf Coast LNG — Train 4 | $486M LSTK | Construction | 0.941 | 0.968 | Behind schedule, modestly over cost |
-| **NV-2208** Silver Basin Solar + Storage | $268M EPCM | Construction | 1.028 | 1.011 | Ahead of plan on both |
+| **NV-2208** Silver Basin Solar + Storage | $268M EPCM | Construction | 1.017 | 1.011 | Ahead of plan on both |
 | **AB-1750** Scotford Blue Hydrogen | $158M Cost-Plus | Engineering | 0.972 | 0.938 | Early, with cost pressure already |
 
 The generator is deterministic — a fixed PRNG seed per project code — so the
-numbers are the same on every re-seed. Earned value is normalised after
-generation so each project's rolled-up SPI and CPI land exactly on its target;
-per-account variance is real, but the headline matches the story.
+numbers are the same on every re-seed. Because earned value is derived from
+activity progress rather than written directly, the seeder hits each project's
+target SPI by scaling the *activity percentages* and iterating the same roll-up
+the API runs, then shapes actual cost around the resulting earned value to hit
+the target CPI. Per-account variance is real; the headline matches the story;
+and the seeded database satisfies the same invariant a live edit does.
 
 `npm run db:reset` rebuilds from scratch.
 
@@ -70,9 +93,12 @@ per-account variance is real, but the headline matches the story.
 ```
 src/
   app/
+    (app)/                everything behind the session gate: dashboard,
+                          schedule/, cost/, risk/, documents/
+    login/                the one page a signed-out visitor can render
     api/                  REST routes + the streaming /api/chat endpoint
-    page.tsx              dashboard; schedule/, cost/, risk/, documents/
     globals.css           the Hermes design tokens
+  middleware.ts           session gate in front of every page and route
   components/
     shell/                title bar, sidebar, status bar, resizable frame
     charts/               Recharts wrappers over one shared chart theme
@@ -82,6 +108,9 @@ src/
   lib/
     schema.sql            the full EPC schema
     db.ts queries.ts      connection and the typed query + metrics layer
+    rollup-core.mjs       schedule -> cost roll-up, shared with the seeder
+    validation.ts         Zod schemas shared by the UI and the API
+    auth.ts rate-limit.ts session credential and token buckets
     agent-context.ts      builds the agent's briefing from the database
     agent-local.ts        the offline analyst
 scripts/seed.mjs          the demo-portfolio generator
@@ -89,10 +118,26 @@ scripts/seed.mjs          the demo-portfolio generator
 
 ### A few decisions worth knowing
 
-**Earned value is computed in one place.** `projectMetrics()` in
-`src/lib/queries.ts` rolls the control accounts up into SPI, CPI, EAC, ETC, VAC
-and TCPI. The dashboard, the status bar, the cost view, and the agent all call
-it, so there is exactly one definition of each figure.
+**Progress and money are one chain, not two.** `src/lib/rollup-core.mjs` owns
+the only path from schedule to cost:
+
+```
+activity % complete
+  -> budget-weighted progress of the WBS node
+  -> control-account earned value
+  -> forecast at completion
+  -> the EVM period at the data date
+  -> projectMetrics(), and so every view and the agent briefing
+```
+
+Marking an activity complete moves SPI, CPI, EAC and the S-curve in the same
+transaction. Nothing else writes `cost_accounts.earned_value` — the seeder calls
+that same file, so the invariant holds from the first row inserted rather than
+only after the first edit. Actual cost is deliberately outside the chain: it
+comes from the ledger, not from progress.
+
+`projectMetrics()` in `src/lib/queries.ts` is the single definition of SPI, CPI,
+EAC, ETC, VAC and TCPI on top of that roll-up.
 
 **The agent gets a briefing, not a database handle.** Every chat turn rebuilds a
 plain-text snapshot of the project from the current tables and hands that to the
@@ -105,10 +150,24 @@ than a second axis. The categorical palette is checked for colourblind
 separation and contrast against the dark surface; the values live in
 `globals.css` under `--color-series-*`.
 
-**Progress edits write back.** The activity and risk inspectors PATCH through
-the API and re-derive what depends on them: earned value follows percent
-complete, severity and expected value follow probability and impact. Derived
-fields are recomputed server-side rather than trusted from the client.
+**The API validates values, not just field names.** `src/lib/validation.ts`
+holds Zod schemas shared by the UI and the routes: percent complete is 0–100,
+statuses are enums, dates must be real calendar days, a forecast finish cannot
+precede its start, risk scores are 1–5. A column allowlist stops a caller naming
+an arbitrary column; these stop them putting `631` into an allowed one. Derived
+fields — earned value, severity, expected value — are recomputed server-side and
+rejected if supplied.
+
+**Writes are rate limited and bounded.** Token buckets per client cover the
+agent endpoint (the only path that can spend money at a provider), the write
+routes, and login. Chat messages are capped and oversized bodies refused before
+buffering.
+
+**The schedule is a register, not a solver.** Hermes stores predecessors, float
+and critical-path flags but does not run CPM. Editing a forecast date does not
+move successors or recompute float, and the activity inspector says so rather
+than letting a planner assume otherwise. A real scheduling layer — or ingesting
+calculated dates from P6/MSP — is the next step for that view.
 
 ## Scripts
 
@@ -119,9 +178,11 @@ fields are recomputed server-side rather than trusted from the client.
 | `npm run db:seed` | Build and populate the database |
 | `npm run db:reset` | Delete and rebuild it |
 | `npm run typecheck` | `tsc --noEmit` |
+| `npm run auth:hash -- 'pw'` | Generate `HERMES_AUTH_PASSWORD` and `HERMES_SESSION_SECRET` |
 
 ## Stack
 
 Next.js 15 (App Router) · React 19 · TypeScript · Tailwind CSS v4 · SQLite via
-better-sqlite3 · Recharts · react-resizable-panels · lucide-react ·
-`@anthropic-ai/sdk` for the streaming agent.
+better-sqlite3 · Zod · Recharts · react-resizable-panels · lucide-react ·
+`@anthropic-ai/sdk` for the streaming agent. Session auth uses `node:crypto`
+only — no auth dependency.

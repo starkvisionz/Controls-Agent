@@ -115,6 +115,15 @@ export function TaskDetail({
         <div className="mt-4 border-t border-line pt-3">
           <div className="label mb-2">Update progress</div>
 
+          {/* Hermes stores the network but does not solve it. Saying so beats
+              letting a planner assume successors moved when they did not. */}
+          <p className="mb-3 rounded-sm border border-line bg-raised px-2 py-1.5 text-[10px] leading-relaxed text-ink-mute">
+            Progress updates flow through to earned value and the project&apos;s cost
+            performance. They do <strong className="text-ink-dim">not</strong> re-run the
+            network: successor dates, total float and the critical path stay as imported
+            until the source schedule is republished.
+          </p>
+
           <div className="mb-1 flex items-center justify-between">
             <span className="text-2xs text-ink-mute">Percent complete</span>
             <span className="font-mono text-2xs text-ink tabular">{percent}%</span>

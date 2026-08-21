@@ -1,20 +1,12 @@
 import { NextResponse } from "next/server";
-import { one, run } from "@/lib/db";
+import { clientKey, consume, LIMITS, tooManyRequests } from "@/lib/rate-limit";
+import { getDb, one } from "@/lib/db";
+import { recalculateProject } from "@/lib/rollup";
+import { taskPatchSchema, toFieldErrors } from "@/lib/validation";
 import type { Task } from "@/lib/types";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-
-/** Fields a user may edit from the schedule view. */
-const EDITABLE = new Set([
-  "status",
-  "percent_complete",
-  "forecast_start",
-  "forecast_finish",
-  "responsible",
-  "notes",
-  "total_float_days",
-]);
 
 export async function GET(_req: Request, ctx: { params: Promise<{ id: string }> }) {
   const { id } = await ctx.params;
@@ -25,22 +17,71 @@ export async function GET(_req: Request, ctx: { params: Promise<{ id: string }> 
 
 export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }> }) {
   const { id } = await ctx.params;
+
+  const gate = consume(clientKey(req, "write"), LIMITS.write);
+  if (!gate.allowed) return tooManyRequests(gate.retryAfterSeconds);
+
   const existing = one<Task>(`SELECT * FROM tasks WHERE id = ?`, [id]);
   if (!existing) return NextResponse.json({ error: "Task not found" }, { status: 404 });
 
-  const body = (await req.json()) as Record<string, unknown>;
-  const updates = Object.entries(body).filter(([key]) => EDITABLE.has(key));
-  if (updates.length === 0) {
-    return NextResponse.json({ error: "No editable fields supplied" }, { status: 400 });
+  let raw: unknown;
+  try {
+    raw = await req.json();
+  } catch {
+    return NextResponse.json({ error: "Request body must be JSON" }, { status: 400 });
   }
 
-  const setClause = updates.map(([key]) => `${key} = ?`).join(", ");
-  run(`UPDATE tasks SET ${setClause} WHERE id = ?`, [...updates.map(([, v]) => v), id]);
-
-  // Progress and earned value move together, so recompute EV from the budget.
-  if (Object.hasOwn(body, "percent_complete")) {
-    run(`UPDATE tasks SET earned_value = budget * (percent_complete / 100.0) WHERE id = ?`, [id]);
+  const parsed = taskPatchSchema.safeParse(raw);
+  if (!parsed.success) {
+    return NextResponse.json(
+      { error: "Invalid activity update", fields: toFieldErrors(parsed.error) },
+      { status: 422 }
+    );
   }
+  const patch = parsed.data;
+
+  // Cross-field rules need the stored row too: a caller may move only one end
+  // of the window and still invert it against the value already on record.
+  const start = patch.forecast_start ?? existing.forecast_start;
+  const finish = patch.forecast_finish ?? existing.forecast_finish;
+  if (finish < start) {
+    return NextResponse.json(
+      {
+        error: "Invalid activity update",
+        fields: [
+          { field: "forecast_finish", message: "forecast finish cannot precede forecast start" },
+        ],
+      },
+      { status: 422 }
+    );
+  }
+
+  const db = getDb();
+  const entries = Object.entries(patch);
+
+  const write = db.transaction(() => {
+    db.prepare(
+      `UPDATE tasks SET ${entries.map(([k]) => `${k} = ?`).join(", ")} WHERE id = ?`
+    ).run(...entries.map(([, v]) => v as never), id);
+
+    // Status and progress are two views of one fact; keep them consistent even
+    // when only one of them was sent.
+    if (patch.status === "complete" && patch.percent_complete === undefined) {
+      db.prepare(`UPDATE tasks SET percent_complete = 100 WHERE id = ?`).run(id);
+    } else if (patch.status === "not-started" && patch.percent_complete === undefined) {
+      db.prepare(`UPDATE tasks SET percent_complete = 0 WHERE id = ?`).run(id);
+    }
+
+    // Activity earned value is always derived, never supplied.
+    db.prepare(
+      `UPDATE tasks SET earned_value = budget * (percent_complete / 100.0) WHERE id = ?`
+    ).run(id);
+
+    // The write is not finished until the money agrees with the schedule.
+    recalculateProject(existing.project_id, db);
+  });
+
+  write();
 
   return NextResponse.json({ task: one<Task>(`SELECT * FROM tasks WHERE id = ?`, [id]) });
 }

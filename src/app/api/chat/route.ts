@@ -4,6 +4,8 @@ import { run } from "@/lib/db";
 import { AGENT_SYSTEM_PROMPT, buildProjectBriefing } from "@/lib/agent-context";
 import { localAnswer } from "@/lib/agent-local";
 import { getOrCreateConversation, getProject, listMessages } from "@/lib/queries";
+import { chatRequestSchema, toFieldErrors } from "@/lib/validation";
+import { clientKey, consume, LIMITS, tooManyRequests } from "@/lib/rate-limit";
 import type { Project } from "@/lib/types";
 
 export const runtime = "nodejs";
@@ -14,20 +16,41 @@ const MODEL = process.env.ANTHROPIC_MODEL?.trim() || "claude-opus-5";
 /** How many prior turns to replay to the model. */
 const HISTORY_TURNS = 12;
 
-type ChatRequest = { projectId?: string; message?: string };
-
 function sse(event: string, data: unknown): Uint8Array {
   return new TextEncoder().encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
 }
 
+/** Refuse an oversized body before buffering it into memory. */
+const MAX_BODY_BYTES = 16 * 1024;
+
 export async function POST(req: Request) {
-  const body = (await req.json()) as ChatRequest;
-  const question = body.message?.trim();
-  if (!question) {
-    return Response.json({ error: "message is required" }, { status: 400 });
+  // This is the one route that can spend money at a provider, so it is limited
+  // before anything else happens.
+  const gate = consume(clientKey(req, "chat"), LIMITS.chat);
+  if (!gate.allowed) return tooManyRequests(gate.retryAfterSeconds);
+
+  const declaredLength = Number(req.headers.get("content-length") ?? 0);
+  if (declaredLength > MAX_BODY_BYTES) {
+    return Response.json({ error: "Request body is too large" }, { status: 413 });
   }
 
-  const project = body.projectId ? getProject(body.projectId) : undefined;
+  let raw: unknown;
+  try {
+    raw = await req.json();
+  } catch {
+    return Response.json({ error: "Request body must be JSON" }, { status: 400 });
+  }
+
+  const parsed = chatRequestSchema.safeParse(raw);
+  if (!parsed.success) {
+    return Response.json(
+      { error: "Invalid chat request", fields: toFieldErrors(parsed.error) },
+      { status: 422 }
+    );
+  }
+  const { projectId, message: question } = parsed.data;
+
+  const project = getProject(projectId);
   if (!project) {
     return Response.json({ error: "Project not found" }, { status: 404 });
   }

@@ -1,20 +1,11 @@
 import { NextResponse } from "next/server";
-import { one, run } from "@/lib/db";
+import { clientKey, consume, LIMITS, tooManyRequests } from "@/lib/rate-limit";
+import { getDb, one } from "@/lib/db";
+import { documentPatchSchema, toFieldErrors } from "@/lib/validation";
 import type { ProjectDocument } from "@/lib/types";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-
-const EDITABLE = new Set([
-  "status",
-  "review_status",
-  "revision",
-  "reviewer",
-  "due_date",
-  "issued_date",
-  "returned_date",
-  "notes",
-]);
 
 export async function GET(_req: Request, ctx: { params: Promise<{ id: string }> }) {
   const { id } = await ctx.params;
@@ -25,20 +16,45 @@ export async function GET(_req: Request, ctx: { params: Promise<{ id: string }> 
 
 export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }> }) {
   const { id } = await ctx.params;
-  if (!one<ProjectDocument>(`SELECT * FROM documents WHERE id = ?`, [id])) {
-    return NextResponse.json({ error: "Document not found" }, { status: 404 });
+
+  const gate = consume(clientKey(req, "write"), LIMITS.write);
+  if (!gate.allowed) return tooManyRequests(gate.retryAfterSeconds);
+  const existing = one<ProjectDocument>(`SELECT * FROM documents WHERE id = ?`, [id]);
+  if (!existing) return NextResponse.json({ error: "Document not found" }, { status: 404 });
+
+  let raw: unknown;
+  try {
+    raw = await req.json();
+  } catch {
+    return NextResponse.json({ error: "Request body must be JSON" }, { status: 400 });
   }
 
-  const body = (await req.json()) as Record<string, unknown>;
-  const updates = Object.entries(body).filter(([key]) => EDITABLE.has(key));
-  if (updates.length === 0) {
-    return NextResponse.json({ error: "No editable fields supplied" }, { status: 400 });
+  const parsed = documentPatchSchema.safeParse(raw);
+  if (!parsed.success) {
+    return NextResponse.json(
+      { error: "Invalid document update", fields: toFieldErrors(parsed.error) },
+      { status: 422 }
+    );
+  }
+  const patch = parsed.data;
+
+  // A review cannot come back before it went out.
+  const issued = patch.issued_date !== undefined ? patch.issued_date : existing.issued_date;
+  const returned = patch.returned_date !== undefined ? patch.returned_date : existing.returned_date;
+  if (issued && returned && returned < issued) {
+    return NextResponse.json(
+      {
+        error: "Invalid document update",
+        fields: [{ field: "returned_date", message: "a document cannot return before it is issued" }],
+      },
+      { status: 422 }
+    );
   }
 
-  run(
-    `UPDATE documents SET ${updates.map(([k]) => `${k} = ?`).join(", ")} WHERE id = ?`,
-    [...updates.map(([, v]) => v), id]
-  );
+  const entries = Object.entries(patch);
+  getDb()
+    .prepare(`UPDATE documents SET ${entries.map(([k]) => `${k} = ?`).join(", ")} WHERE id = ?`)
+    .run(...entries.map(([, v]) => v as never), id);
 
   return NextResponse.json({
     document: one<ProjectDocument>(`SELECT * FROM documents WHERE id = ?`, [id]),

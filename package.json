@@ -10,7 +10,8 @@
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
     "db:seed": "node scripts/seed.mjs",
-    "db:reset": "rm -f data/hermes.db && npm run db:seed"
+    "db:reset": "rm -f data/hermes.db && npm run db:seed",
+    "auth:hash": "node scripts/hash-password.mjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.120.0",
@@ -20,7 +21,8 @@
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
     "react-resizable-panels": "^4.0.0",
-    "recharts": "^3.2.1"
+    "recharts": "^3.2.1",
+    "zod": "^4.4.3"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4.1.13",

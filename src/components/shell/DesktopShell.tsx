@@ -33,15 +33,21 @@ const safeStorage = {
   },
 };
 
-export function DesktopShell({ children }: { children: ReactNode }) {
+export function DesktopShell({
+  children,
+  authEnforced,
+}: {
+  children: ReactNode;
+  authEnforced: boolean;
+}) {
   return (
     <ProjectProvider>
-      <ShellFrame>{children}</ShellFrame>
+      <ShellFrame authEnforced={authEnforced}>{children}</ShellFrame>
     </ProjectProvider>
   );
 }
 
-function ShellFrame({ children }: { children: ReactNode }) {
+function ShellFrame({ children, authEnforced }: { children: ReactNode; authEnforced: boolean }) {
   const { loading, error } = useProjects();
   const [collapsed, setCollapsed] = useState(false);
   const [agentOpen, setAgentOpen] = useState(true);
@@ -106,7 +112,7 @@ function ShellFrame({ children }: { children: ReactNode }) {
 
   return (
     <div className="flex h-dvh flex-col overflow-hidden bg-canvas">
-      <TitleBar agentOpen={agentOpen} onToggleAgent={toggleAgent} />
+      <TitleBar agentOpen={agentOpen} onToggleAgent={toggleAgent} authEnforced={authEnforced} />
 
       <div className="flex min-h-0 flex-1">
         <Sidebar collapsed={collapsed} onToggle={toggleSidebar} badges={{}} />

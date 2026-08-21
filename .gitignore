@@ -21,3 +21,5 @@ npm-debug.log*
 yarn-error.log*
 .vercel
 
+# local verification helpers (not part of the app)
+.hermes-*.mjs

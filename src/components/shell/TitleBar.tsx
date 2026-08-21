@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { Check, ChevronDown, MessageSquareText, Radio } from "lucide-react";
+import { Check, ChevronDown, LogOut, MessageSquareText, Radio } from "lucide-react";
 import { useProjects } from "./ProjectContext";
 import { index, money, shortDate } from "@/lib/format";
 
@@ -12,9 +12,12 @@ import { index, money, shortDate } from "@/lib/format";
 export function TitleBar({
   agentOpen,
   onToggleAgent,
+  authEnforced,
 }: {
   agentOpen: boolean;
   onToggleAgent: () => void;
+  /** Hides the sign-out control when the app is running unauthenticated. */
+  authEnforced: boolean;
 }) {
   const { projects, activeProject, setActiveProjectId } = useProjects();
   const [open, setOpen] = useState(false);
@@ -129,18 +132,34 @@ export function TitleBar({
         </div>
       ) : null}
 
-      <button
-        onClick={onToggleAgent}
-        title={agentOpen ? "Hide the agent panel" : "Show the agent panel"}
-        className={`ml-auto flex h-6 items-center gap-1.5 rounded-sm border px-2 text-2xs transition-colors ${
-          agentOpen
-            ? "border-accent/40 bg-accent/10 text-accent-hi"
-            : "border-line bg-raised text-ink-mute hover:text-ink-dim"
-        }`}
-      >
-        <MessageSquareText className="h-3 w-3" />
-        Agent
-      </button>
+      <div className="ml-auto flex items-center gap-1.5">
+        <button
+          onClick={onToggleAgent}
+          title={agentOpen ? "Hide the agent panel" : "Show the agent panel"}
+          className={`flex h-6 items-center gap-1.5 rounded-sm border px-2 text-2xs transition-colors ${
+            agentOpen
+              ? "border-accent/40 bg-accent/10 text-accent-hi"
+              : "border-line bg-raised text-ink-mute hover:text-ink-dim"
+          }`}
+        >
+          <MessageSquareText className="h-3 w-3" />
+          Agent
+        </button>
+
+        {authEnforced ? (
+          <button
+            onClick={async () => {
+              await fetch("/api/auth/logout", { method: "POST" });
+              window.location.href = "/login";
+            }}
+            title="Sign out"
+            aria-label="Sign out"
+            className="flex h-6 w-6 items-center justify-center rounded-sm border border-line bg-raised text-ink-mute transition-colors hover:text-ink-dim"
+          >
+            <LogOut className="h-3 w-3" />
+          </button>
+        ) : null}
+      </div>
     </header>
   );
 }

@@ -9,6 +9,7 @@
 import Database from "better-sqlite3";
 import fs from "node:fs";
 import path from "node:path";
+import { recalculateProject } from "../src/lib/rollup-core.mjs";
 
 const ROOT = process.cwd();
 const DB_PATH = process.env.HERMES_DB_PATH
@@ -455,29 +456,22 @@ function seedProject(p) {
       node,
       accountNo,
       pv,
-      ev: pv * spiLocal,
-      ac: pv * spiLocal > 0 ? (pv * spiLocal) / cpiLocal : 0,
+      spiLocal,
+      cpiLocal,
       approvedChanges: rnd() < 0.28 ? round(node.budget * between(-0.03, 0.09)) : 0,
       commitLead: node.category === "Procurement" ? between(1.1, 1.35) : between(0.98, 1.12),
     });
   }
 
-  const sum = (key) => drafts.reduce((total, d) => total + d[key], 0);
-
-  // Scale earned value so the rolled-up SPI is exactly the project's target,
-  // then scale actual cost so the rolled-up CPI is exactly its target too.
-  // Uniform scaling preserves every account's relative standing.
-  const evScale = sum("ev") > 0 ? (p.spi * sum("pv")) / sum("ev") : 1;
-  for (const d of drafts) d.ev *= evScale;
-
-  const acScale = sum("ac") > 0 ? sum("ev") / p.cpi / sum("ac") : 1;
-  for (const d of drafts) d.ac *= acScale;
-
+  // Earned value and the forecast are NOT written here. They are derived from
+  // activity progress by recalculateProject(), the same roll-up the API runs,
+  // so the seeded database already satisfies the invariant that a schedule edit
+  // must move the project's EVM. Budgets, planned value and the intended local
+  // CPI are the inputs; the roll-up produces the rest.
   const accounts = [];
   for (const d of drafts) {
     const { node } = d;
     const currentBudget = round(node.budget + d.approvedChanges);
-    const cpiLocal = d.ac > 0 ? d.ev / d.ac : 1;
 
     const row = {
       id: `${p.id}-ca-${d.accountNo}`,
@@ -490,50 +484,23 @@ function seedProject(p) {
       original_budget: round(node.budget),
       approved_changes: d.approvedChanges,
       current_budget: currentBudget,
-      // Commitments run ahead of actuals on material-heavy accounts.
-      committed: Math.min(round(d.ac * d.commitLead), round(node.budget * 1.05)),
-      actual_cost: round(d.ac),
-      earned_value: round(d.ev),
+      committed: 0,
+      actual_cost: 0,
+      earned_value: 0,
       planned_value: round(d.pv),
-      forecast_at_completion: round(cpiLocal > 0 ? currentBudget / cpiLocal : currentBudget),
+      forecast_at_completion: currentBudget,
     };
     insertCostAccount.run(row);
-    accounts.push({ ...row, wbsCode: node.code, discipline: node.discipline, plannedPct: node.progress });
-  }
-
-  // ---- Cost ledger entries --------------------------------------------
-  let entryNo = 0;
-  for (const acc of accounts) {
-    if (acc.actual_cost <= 0) continue;
-    const count = intBetween(3, 7);
-    let remaining = acc.actual_cost;
-    for (let i = 0; i < count; i++) {
-      const last = i === count - 1;
-      const amount = last ? remaining : round(remaining * between(0.15, 0.45));
-      remaining -= amount;
-      if (amount <= 0) continue;
-
-      const entryDate = addDays(p.start_date, intBetween(20, elapsed));
-      const type = pick(["invoice", "invoice", "accrual", "timesheet", "commitment"]);
-      entryNo += 1;
-      insertCostEntry.run({
-        id: `${p.id}-ce-${entryNo}`,
-        project_id: p.id,
-        cost_account_id: acc.id,
-        entry_date: entryDate,
-        entry_type: type,
-        vendor: type === "timesheet" ? "Internal" : pick(VENDORS),
-        reference:
-          type === "invoice"
-            ? `INV-${intBetween(10000, 99999)}`
-            : type === "commitment"
-              ? `PO-${intBetween(4000, 8999)}`
-              : `JRN-${intBetween(1000, 9999)}`,
-        description: `${acc.name} — ${type === "timesheet" ? "labour distribution" : "progress billing"}`,
-        amount,
-        status: rnd() < 0.07 ? "disputed" : rnd() < 0.15 ? "pending" : "posted",
-      });
-    }
+    accounts.push({
+      ...row,
+      wbsCode: node.code,
+      discipline: node.discipline,
+      plannedPct: node.progress,
+      // Carried so actual cost can be shaped to the intended performance once
+      // earned value is known.
+      cpiLocal: d.cpiLocal,
+      commitLead: d.commitLead,
+    });
   }
 
   // ---- Schedule activities --------------------------------------------
@@ -693,6 +660,118 @@ function seedProject(p) {
     });
   });
 
+  // ---- Reconcile the money to the schedule ------------------------------
+  // Earned value now comes only from activity progress, via the same roll-up
+  // the API runs. To still land each project on its intended SPI and CPI, the
+  // knobs are the inputs to that roll-up rather than its outputs: scale the
+  // activity percents until the derived EV hits the target against PV, then
+  // shape actual cost around the resulting EV.
+  const projectPv = accounts.reduce((total, a) => total + a.planned_value, 0);
+
+  const scaleTaskProgress = db.prepare(
+    `UPDATE tasks
+        SET percent_complete = MAX(0, MIN(100, percent_complete * ?)),
+            earned_value = budget * (MAX(0, MIN(100, percent_complete * ?)) / 100.0)
+      WHERE project_id = ? AND is_milestone = 0`
+  );
+
+  const currentEv = () =>
+    db
+      .prepare(`SELECT COALESCE(SUM(earned_value), 0) AS ev FROM cost_accounts WHERE project_id = ?`)
+      .get(p.id).ev;
+
+  // Clamping at 100% makes this non-linear, so iterate rather than solving once.
+  recalculateProject(db, p.id);
+  for (let pass = 0; pass < 12; pass++) {
+    const ev = currentEv();
+    if (ev <= 0) break;
+    const k = (p.spi * projectPv) / ev;
+    if (Math.abs(k - 1) < 0.0005) break;
+    scaleTaskProgress.run(k, k, p.id);
+    recalculateProject(db, p.id);
+  }
+
+  // Actual cost: give each account the performance it was drafted with, then
+  // scale uniformly so the project CPI lands exactly on target. Scaling AC
+  // cannot disturb the schedule-to-EV invariant, which is the point of keeping
+  // the two directions separate.
+  const evByAccount = new Map(
+    db
+      .prepare(`SELECT id, earned_value FROM cost_accounts WHERE project_id = ?`)
+      .all(p.id)
+      .map((row) => [row.id, row.earned_value])
+  );
+
+  let rawAcTotal = 0;
+  for (const acc of accounts) {
+    const ev = evByAccount.get(acc.id) ?? 0;
+    acc.rawAc = ev > 0 ? ev / acc.cpiLocal : 0;
+    rawAcTotal += acc.rawAc;
+  }
+
+  const projectEv = currentEv();
+  const acScale = rawAcTotal > 0 ? projectEv / p.cpi / rawAcTotal : 1;
+
+  const setActuals = db.prepare(
+    `UPDATE cost_accounts SET actual_cost = ?, committed = ? WHERE id = ?`
+  );
+  for (const acc of accounts) {
+    const ac = round(acc.rawAc * acScale);
+    // Commitments run ahead of actuals on material-heavy accounts.
+    const committed = Math.min(round(ac * acc.commitLead), round(acc.current_budget * 1.05));
+    setActuals.run(ac, committed, acc.id);
+    acc.actual_cost = ac;
+    acc.committed = committed;
+  }
+
+  // Final pass: the forecast at completion depends on actual cost.
+  recalculateProject(db, p.id);
+  for (const row of db
+    .prepare(`SELECT id, earned_value, forecast_at_completion FROM cost_accounts WHERE project_id = ?`)
+    .all(p.id)) {
+    const acc = accounts.find((a) => a.id === row.id);
+    if (acc) {
+      acc.earned_value = row.earned_value;
+      acc.forecast_at_completion = row.forecast_at_completion;
+    }
+  }
+
+  // ---- Cost ledger entries --------------------------------------------
+  let entryNo = 0;
+  for (const acc of accounts) {
+    if (acc.actual_cost <= 0) continue;
+    const count = intBetween(3, 7);
+    let remaining = acc.actual_cost;
+    for (let i = 0; i < count; i++) {
+      const last = i === count - 1;
+      const amount = last ? remaining : round(remaining * between(0.15, 0.45));
+      remaining -= amount;
+      if (amount <= 0) continue;
+
+      const entryDate = addDays(p.start_date, intBetween(20, elapsed));
+      const type = pick(["invoice", "invoice", "accrual", "timesheet", "commitment"]);
+      entryNo += 1;
+      insertCostEntry.run({
+        id: `${p.id}-ce-${entryNo}`,
+        project_id: p.id,
+        cost_account_id: acc.id,
+        entry_date: entryDate,
+        entry_type: type,
+        vendor: type === "timesheet" ? "Internal" : pick(VENDORS),
+        reference:
+          type === "invoice"
+            ? `INV-${intBetween(10000, 99999)}`
+            : type === "commitment"
+              ? `PO-${intBetween(4000, 8999)}`
+              : `JRN-${intBetween(1000, 9999)}`,
+        description: `${acc.name} — ${type === "timesheet" ? "labour distribution" : "progress billing"}`,
+        amount,
+        status: rnd() < 0.07 ? "disputed" : rnd() < 0.15 ? "pending" : "posted",
+      });
+    }
+  }
+
+
   // ---- Monthly EVM periods --------------------------------------------
   const totals = accounts.reduce(
     (acc, a) => ({
@@ -756,6 +835,11 @@ function seedProject(p) {
     cursor = new Date(Date.UTC(cursor.getUTCFullYear(), cursor.getUTCMonth() + 1, 1));
     if (period > 120) break;
   }
+
+  // The period rows exist now, so run the roll-up once more to stamp the
+  // data-date period with the final totals. From here the seeded database
+  // satisfies the same invariant the API maintains.
+  recalculateProject(db, p.id);
 
   return { level2, accounts, tasks, totals, elapsed, timeSpan };
 }
