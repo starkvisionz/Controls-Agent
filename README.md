@@ -22,6 +22,8 @@ same tables the agent reads, so the dashboard and the agent never disagree.
 | **Documents** | Deliverable register with issue status, client review codes, overdue tracking, and approval progress by discipline |
 | **Agent** | A streaming chat panel that answers from the live database — cost variance, critical path, risk exposure, forecast basis, and recommendations |
 
+![The Changes view — the register, and the budget it moves](docs/changes.png)
+
 ## Running it
 
 ```bash
