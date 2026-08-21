@@ -1,0 +1,34 @@
+{
+  "name": "hermes-controls-agent",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Hermes — desktop UI for the EPC Project Controls Agent",
+  "scripts": {
+    "dev": "next dev -p 3000",
+    "build": "next build",
+    "start": "next start -p 3000",
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit",
+    "db:seed": "node scripts/seed.mjs",
+    "db:reset": "rm -f data/hermes.db && npm run db:seed"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.120.0",
+    "better-sqlite3": "^13.0.3",
+    "lucide-react": "^0.545.0",
+    "next": "^15.5.4",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0",
+    "react-resizable-panels": "^4.0.0",
+    "recharts": "^3.2.1"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "^4.1.13",
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/node": "^22.18.0",
+    "@types/react": "^19.2.0",
+    "@types/react-dom": "^19.2.0",
+    "tailwindcss": "^4.1.13",
+    "typescript": "^5.9.2"
+  }
+}

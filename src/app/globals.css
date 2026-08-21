@@ -1,0 +1,343 @@
+@import "tailwindcss";
+
+/* ==========================================================================
+   Hermes — desktop design tokens
+
+   A dark, low-chroma instrument panel. The greys carry a slight blue cast so
+   the single warm accent (Hermes orange) reads as the only "live" colour in
+   the interface; everything else recedes. Data colours are reserved strictly
+   for meaning — never decoration.
+   ========================================================================== */
+
+@theme {
+  /* --- Surfaces, darkest to lightest ---------------------------------- */
+  --color-canvas: #08090b;        /* app background behind all chrome */
+  --color-chrome: #0c0e11;        /* title bar, status bar, sidebar */
+  --color-surface: #101317;       /* panels and cards */
+  --color-raised: #161a1f;        /* hovered rows, inputs, popovers */
+  --color-overlay: #1c2128;       /* menus, tooltips, active rows */
+
+  /* --- Lines ---------------------------------------------------------- */
+  --color-line: #1e232a;          /* default hairline */
+  --color-line-strong: #2a313a;   /* panel dividers, table headers */
+  --color-line-soft: #171b21;     /* internal row separators */
+
+  /* --- Text ----------------------------------------------------------- */
+  --color-ink: #e8eaed;           /* primary */
+  --color-ink-dim: #a3abb5;       /* secondary */
+  --color-ink-mute: #6c757f;      /* labels, captions */
+  --color-ink-faint: #4a525b;     /* disabled, watermarks */
+
+  /* --- Accent (Hermes orange) ----------------------------------------- */
+  --color-accent: #f26c1d;
+  --color-accent-hi: #ff8a3d;
+  --color-accent-lo: #b84f11;
+  --color-accent-wash: #2a1a10;
+
+  /* --- Semantic / data ------------------------------------------------ */
+  --color-good: #3fbf87;
+  --color-good-wash: #10241c;
+  --color-warn: #e3a53a;
+  --color-warn-wash: #2a2113;
+  --color-bad: #e05c5c;
+  --color-bad-wash: #2b1517;
+  --color-info: #5b9ee0;
+  --color-info-wash: #121e2b;
+  --color-neutral: #7c8794;
+
+  /* Categorical series, assigned in fixed order and never cycled.
+     Validated against the #101317 chart surface for the dark-mode lightness
+     band, chroma floor, CVD separation, and contrast. Do not hand-tweak these
+     without re-running the check — small nudges break the deuteranopia gaps. */
+  --color-series-1: #dd5c00;   /* orange  — actual cost / primary */
+  --color-series-2: #438dd4;   /* blue    — planned value */
+  --color-series-3: #0ca26c;   /* green   — earned value */
+  --color-series-4: #9f72c5;   /* violet */
+  --color-series-5: #b57d04;   /* ochre */
+  --color-series-6: #009ba9;   /* teal */
+
+  /* --- Type ----------------------------------------------------------- */
+  --font-sans: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI",
+    "Inter", "Helvetica Neue", Arial, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", "JetBrains Mono", "Menlo", "Consolas",
+    monospace;
+
+  /* Desktop UI runs a notch smaller than the web default. */
+  --text-2xs: 0.6875rem;          /* 11px — table cells, labels */
+  --text-2xs--line-height: 1rem;
+  --text-xs: 0.75rem;             /* 12px — body */
+  --text-xs--line-height: 1.125rem;
+  --text-sm: 0.8125rem;           /* 13px — emphasis */
+  --text-sm--line-height: 1.25rem;
+
+  --radius-panel: 6px;
+}
+
+/* ==========================================================================
+   Base
+   ========================================================================== */
+
+* {
+  border-color: var(--color-line);
+  min-width: 0;
+}
+
+html,
+body {
+  height: 100%;
+  overflow: hidden;            /* the shell scrolls its panes, not the page */
+}
+
+body {
+  background: var(--color-canvas);
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+  font-size: var(--text-xs);
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/* Numbers must line up in columns wherever they appear. */
+.tabular,
+table,
+.font-mono {
+  font-variant-numeric: tabular-nums;
+}
+
+::selection {
+  background: var(--color-accent-lo);
+  color: #fff;
+}
+
+/* ==========================================================================
+   Scrollbars — thin, dark, and only visible against their own track
+   ========================================================================== */
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-line-strong) transparent;
+}
+
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+*::-webkit-scrollbar-thumb {
+  background: var(--color-line-strong);
+  border: 3px solid transparent;
+  background-clip: content-box;
+  border-radius: 6px;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background: #3a424d;
+  background-clip: content-box;
+}
+
+*::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+/* ==========================================================================
+   Focus — a single visible ring, never a browser default outline
+   ========================================================================== */
+
+:focus {
+  outline: none;
+}
+
+:focus-visible {
+  outline: 1px solid var(--color-accent);
+  outline-offset: 1px;
+}
+
+/* ==========================================================================
+   Component primitives
+   ========================================================================== */
+
+/* Uppercase micro-label above a value or section. */
+.label {
+  font-size: 0.625rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--color-ink-mute);
+  font-weight: 500;
+}
+
+/* Panel chrome shared by every card and pane. */
+.panel {
+  background: var(--color-surface);
+  border: 1px solid var(--color-line);
+  border-radius: var(--radius-panel);
+}
+
+/* The 28px strip at the top of every panel and pane. */
+.panel-head {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  height: 30px;
+  padding: 0 0.625rem;
+  border-bottom: 1px solid var(--color-line);
+  background: linear-gradient(to bottom, #13171c, #101317);
+  flex: none;
+}
+
+/* Row hover used across every table in the app. */
+.row-hover:hover {
+  background: var(--color-raised);
+}
+
+/* Drag handle between resizable panes. */
+.resize-handle {
+  position: relative;
+  background: var(--color-line);
+  transition: background 120ms ease;
+}
+
+.resize-handle:hover,
+.resize-handle[data-resize-handle-state="drag"] {
+  background: var(--color-accent);
+}
+
+/* Widen the hit area without widening the visible line. */
+.resize-handle::after {
+  content: "";
+  position: absolute;
+  inset: -3px;
+}
+
+/* ==========================================================================
+   Motion
+   ========================================================================== */
+
+@keyframes hermes-fade-up {
+  from { opacity: 0; transform: translateY(4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+.animate-in {
+  animation: hermes-fade-up 180ms ease-out both;
+}
+
+@keyframes hermes-pulse {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: 0.35; }
+}
+
+.animate-pulse-dot {
+  animation: hermes-pulse 1.4s ease-in-out infinite;
+}
+
+/* The block that trails streaming agent text. */
+@keyframes hermes-caret {
+  0%, 45%  { opacity: 1; }
+  50%, 95% { opacity: 0; }
+}
+
+.stream-caret {
+  display: inline-block;
+  width: 0.45em;
+  height: 1em;
+  margin-left: 1px;
+  vertical-align: text-bottom;
+  background: var(--color-accent);
+  animation: hermes-caret 1s steps(1) infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* ==========================================================================
+   Markdown rendered inside agent replies
+   ========================================================================== */
+
+.agent-prose > * + * {
+  margin-top: 0.6rem;
+}
+
+.agent-prose strong {
+  color: var(--color-ink);
+  font-weight: 600;
+}
+
+.agent-prose ol,
+.agent-prose ul {
+  padding-left: 1.1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.agent-prose ol { list-style: decimal; }
+.agent-prose ul { list-style: disc; }
+
+.agent-prose li::marker {
+  color: var(--color-ink-faint);
+}
+
+.agent-prose code {
+  font-family: var(--font-mono);
+  font-size: 0.9em;
+  background: var(--color-raised);
+  border: 1px solid var(--color-line);
+  border-radius: 3px;
+  padding: 0.05rem 0.25rem;
+  color: var(--color-accent-hi);
+}
+
+.agent-prose table {
+  /* Scroll a wide table inside its wrapper rather than crushing the last
+     column into unreadability — the agent panel is often quite narrow. */
+  width: max-content;
+  min-width: 100%;
+  border-collapse: collapse;
+  font-size: var(--text-2xs);
+}
+
+.agent-prose th,
+.agent-prose td {
+  border: 1px solid var(--color-line);
+  padding: 0.25rem 0.4rem;
+  text-align: left;
+}
+
+.agent-prose th {
+  background: var(--color-raised);
+  color: var(--color-ink-dim);
+  font-weight: 500;
+}
+
+/* ==========================================================================
+   Recharts overrides — the library's defaults are far too bright for this UI
+   ========================================================================== */
+
+.recharts-cartesian-axis-tick text {
+  fill: var(--color-ink-mute);
+  font-size: 10px;
+}
+
+.recharts-cartesian-grid line {
+  stroke: var(--color-line-soft);
+}
+
+.recharts-surface {
+  overflow: visible;
+}
+
+.recharts-default-legend {
+  font-size: 11px !important;
+}
