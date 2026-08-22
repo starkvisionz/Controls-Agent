@@ -32,62 +32,74 @@ function subscribe(listener: () => void): () => void {
   };
 }
 
-function read(key: string, fallback: boolean): boolean {
+// ---------------------------------------------------------------------------
+// Storage, with a fallback for when there isn't any
+// ---------------------------------------------------------------------------
+
+/**
+ * Values whose write to localStorage threw, held for the life of the page.
+ *
+ * Swallowing a blocked write and then reading straight back from storage
+ * returns the old value — or none — so the setting never changes and the
+ * control it drives does nothing at all. "Not remembered after a reload" is an
+ * acceptable degradation; "does not work" is not, and blocked site data is a
+ * browser setting rather than an exotic failure.
+ *
+ * Only keys that actually failed to store are held here, so a working browser
+ * keeps reading from localStorage and still sees changes made in another tab.
+ */
+const unstored = new Map<string, string>();
+
+function readRaw(key: string): string | null {
+  if (unstored.has(key)) return unstored.get(key) ?? null;
   try {
-    const raw = window.localStorage.getItem(key);
-    return raw === null ? fallback : raw === "true";
+    return window.localStorage.getItem(key);
   } catch {
-    // Private browsing or blocked site data — the value simply does not persist.
-    return fallback;
+    // Reads can throw too when site data is blocked outright.
+    return null;
   }
 }
 
-function write(key: string, value: boolean): void {
+function writeRaw(key: string, value: string): void {
   try {
-    window.localStorage.setItem(key, String(value));
+    window.localStorage.setItem(key, value);
+    // A previously blocked key that now stores should go back to being read
+    // from storage, so another tab's changes reach this one again.
+    unstored.delete(key);
   } catch {
-    // Non-fatal: the setting applies for this session and is not remembered.
+    // Blocked or full. Keep it in memory so the value the caller just set is
+    // the value the next read returns.
+    unstored.set(key, value);
   }
   // localStorage does not raise `storage` in the tab that wrote it.
   notify();
 }
 
+// ---------------------------------------------------------------------------
+
 export function usePersistedFlag(
   key: string,
   fallback: boolean
 ): [boolean, (next: boolean | ((current: boolean) => boolean)) => void] {
-  const getSnapshot = useCallback(() => read(key, fallback), [key, fallback]);
-  const getServerSnapshot = useCallback(() => fallback, [fallback]);
+  const read = useCallback(() => {
+    const raw = readRaw(key);
+    return raw === null ? fallback : raw === "true";
+  }, [key, fallback]);
 
-  const value = useSyncExternalStore(subscribe, getSnapshot, getServerSnapshot);
+  const getServerSnapshot = useCallback(() => fallback, [fallback]);
+  const value = useSyncExternalStore(subscribe, read, getServerSnapshot);
 
   const set = useCallback(
     (next: boolean | ((current: boolean) => boolean)) => {
-      write(key, typeof next === "function" ? next(read(key, fallback)) : next);
+      const current = readRaw(key);
+      const resolved =
+        typeof next === "function" ? next(current === null ? fallback : current === "true") : next;
+      writeRaw(key, String(resolved));
     },
     [key, fallback]
   );
 
   return [value, set];
-}
-
-// ---------------------------------------------------------------------------
-
-function readString(key: string): string | null {
-  try {
-    return window.localStorage.getItem(key);
-  } catch {
-    return null;
-  }
-}
-
-function writeString(key: string, value: string): void {
-  try {
-    window.localStorage.setItem(key, value);
-  } catch {
-    // Non-fatal: the selection applies for this session and is not remembered.
-  }
-  notify();
 }
 
 /**
@@ -97,11 +109,11 @@ function writeString(key: string, value: string): void {
  * fall back to a default without the markup disagreeing with itself.
  */
 export function usePersistedString(key: string): [string | null, (next: string) => void] {
-  const getSnapshot = useCallback(() => readString(key), [key]);
+  const read = useCallback(() => readRaw(key), [key]);
   const getServerSnapshot = useCallback(() => null, []);
 
-  const value = useSyncExternalStore(subscribe, getSnapshot, getServerSnapshot);
-  const set = useCallback((next: string) => writeString(key, next), [key]);
+  const value = useSyncExternalStore(subscribe, read, getServerSnapshot);
+  const set = useCallback((next: string) => writeRaw(key, next), [key]);
 
   return [value, set];
 }

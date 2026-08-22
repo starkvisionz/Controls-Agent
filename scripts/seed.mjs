@@ -288,10 +288,12 @@ const insertTask = db.prepare(`
 const insertCostAccount = db.prepare(`
   INSERT INTO cost_accounts (id, project_id, wbs_id, code, name, category, cost_type,
     original_budget, approved_changes, current_budget, committed, actual_cost,
-    earned_value, baseline_planned_value, planned_value, forecast_at_completion)
+    earned_value, baseline_earned_value, baseline_planned_value, planned_value,
+    forecast_at_completion)
   VALUES (@id, @project_id, @wbs_id, @code, @name, @category, @cost_type,
     @original_budget, @approved_changes, @current_budget, @committed, @actual_cost,
-    @earned_value, @baseline_planned_value, @planned_value, @forecast_at_completion)`);
+    @earned_value, @baseline_earned_value, @baseline_planned_value, @planned_value,
+    @forecast_at_completion)`);
 
 const insertCostEntry = db.prepare(`
   INSERT INTO cost_entries (id, project_id, cost_account_id, entry_date, entry_type,
@@ -491,6 +493,7 @@ function seedProject(p) {
       committed: 0,
       actual_cost: 0,
       earned_value: 0,
+      baseline_earned_value: 0,
       // Both start at the baseline figure; the roll-up adds the change
       // component to planned_value once change scope is earned against.
       baseline_planned_value: round(d.pv),
@@ -660,6 +663,7 @@ function seedProject(p) {
       is_milestone: 1,
       budget: 0,
       earned_value: 0,
+      baseline_earned_value: 0,
       actual_cost: 0,
       predecessors: "",
       notes: "",
@@ -679,12 +683,12 @@ function seedProject(p) {
   // knobs are the inputs to that roll-up rather than its outputs: scale the
   // activity percents until the derived EV hits the target against PV, then
   // shape actual cost around the resulting EV.
-  // Read back rather than summed from the drafts: the roll-up has just added
-  // the change component to planned value, and targeting against the baseline
-  // figure while measuring the total would aim at the wrong number.
+  // The baseline pair, because that is the scope projectMetrics() reports SPI
+  // on. Targeting the totals would aim at a number the dashboard never shows.
   const projectPv = db
     .prepare(
-      `SELECT COALESCE(SUM(planned_value), 0) AS pv FROM cost_accounts WHERE project_id = ?`
+      `SELECT COALESCE(SUM(baseline_planned_value), 0) AS pv
+         FROM cost_accounts WHERE project_id = ?`
     )
     .get(p.id).pv;
 
@@ -712,7 +716,17 @@ function seedProject(p) {
     recalculateProject(db, p.id);
   };
 
+  // Baseline earned value — the SPI numerator. Actual cost is shaped against
+  // total earned value further down, because CPI is measured on the totals.
   const currentEv = () =>
+    db
+      .prepare(
+        `SELECT COALESCE(SUM(baseline_earned_value), 0) AS ev
+           FROM cost_accounts WHERE project_id = ?`
+      )
+      .get(p.id).ev;
+
+  const totalEv = () =>
     db
       .prepare(`SELECT COALESCE(SUM(earned_value), 0) AS ev FROM cost_accounts WHERE project_id = ?`)
       .get(p.id).ev;
@@ -753,7 +767,7 @@ function seedProject(p) {
     rawAcTotal += acc.rawAc;
   }
 
-  const projectEv = currentEv();
+  const projectEv = totalEv();
   const acScale = rawAcTotal > 0 ? projectEv / p.cpi / rawAcTotal : 1;
 
   const setActuals = db.prepare(
@@ -1536,15 +1550,18 @@ if (demoUsers.length > 0) {
 console.log("\n  Performance roll-up:\n");
 for (const row of db.prepare(`
   SELECT p.code, p.name,
-         SUM(c.planned_value)  AS pv,
-         SUM(c.earned_value)   AS ev,
+         SUM(c.baseline_planned_value) AS pv,
+         SUM(c.baseline_earned_value)  AS ev,
+         SUM(c.earned_value)   AS totalEv,
          SUM(c.actual_cost)    AS ac,
          SUM(c.current_budget) AS bac
     FROM projects p JOIN cost_accounts c ON c.project_id = p.id
    GROUP BY p.id ORDER BY p.code`).all()) {
+  // The same basis projectMetrics() reports: schedule on the baseline pair,
+  // cost on the totals.
   const spi = (row.ev / row.pv).toFixed(3);
-  const cpi = (row.ev / row.ac).toFixed(3);
-  const pct = ((row.ev / row.bac) * 100).toFixed(1);
+  const cpi = (row.totalEv / row.ac).toFixed(3);
+  const pct = ((row.totalEv / row.bac) * 100).toFixed(1);
   console.log(
     `    ${row.code}  SPI ${spi}  CPI ${cpi}  ${pct.padStart(5)}% complete  BAC $${(row.bac / 1e6).toFixed(1)}M`
   );

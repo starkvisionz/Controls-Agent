@@ -538,6 +538,42 @@ check(
   half.metrics.cpi > approved.metrics.cpi,
   `${approved.metrics.cpi.toFixed(4)} -> ${half.metrics.cpi.toFixed(4)}`
 );
+// The other half of the claim, and the one that is easy to get wrong: adding
+// the same amount to earned and planned value drags (EV+c)/(PV+c) toward 1, so
+// a schedule index measured on the totals would drift every time somebody
+// booked progress against a change. SPI is measured on the baseline pair.
+check(
+  "performing it did NOT move SPI",
+  half.metrics.spi.toFixed(7) === approved.metrics.spi.toFixed(7),
+  `${approved.metrics.spi.toFixed(7)} -> ${half.metrics.spi.toFixed(7)}`
+);
+
+// The S-curve's live tip and the KPI row are the same figures or they are not
+// the same report. The tip used to update earned value and actual cost but not
+// planned value, so the curve implied a schedule index the headline did not.
+const curveTip = async () => {
+  const cost = await (await get("/api/projects/prj-gc4410/cost", { headers: authed })).json();
+  const dataDate = cost.project.data_date;
+  return cost.evm
+    .filter((r) => !r.is_forecast && r.period_end <= dataDate)
+    .sort((a, b) => (a.period_end < b.period_end ? 1 : -1))[0];
+};
+
+const tip = await curveTip();
+check(
+  "the S-curve tip carries the KPI's planned value",
+  Math.round(tip.planned_value) === Math.round(half.metrics.pv),
+  `curve ${Math.round(tip.planned_value).toLocaleString()} vs KPI ${Math.round(half.metrics.pv).toLocaleString()}`
+);
+check(
+  "the S-curve tip carries the KPI's earned value",
+  Math.round(tip.earned_value) === Math.round(half.metrics.ev),
+  `curve ${Math.round(tip.earned_value).toLocaleString()} vs KPI ${Math.round(half.metrics.ev).toLocaleString()}`
+);
+check(
+  "the S-curve tip carries the KPI's actual cost",
+  Math.round(tip.actual_cost) === Math.round(half.metrics.ac)
+);
 
 // Progress belongs to approved scope. An order sent back to submitted is scope
 // nobody has agreed to any more, so its earned value goes with it.

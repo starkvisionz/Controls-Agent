@@ -109,6 +109,7 @@ CREATE TABLE IF NOT EXISTS cost_accounts (
   -- scope earns on its own progress, not on the baseline scope's, so the two
   -- components have to stay separable.
   baseline_planned_value REAL NOT NULL DEFAULT 0, -- BCWS of the original scope
+  baseline_earned_value  REAL NOT NULL DEFAULT 0, -- BCWP of the original scope
   earned_value      REAL NOT NULL DEFAULT 0,    -- BCWP, baseline + change scope
   planned_value     REAL NOT NULL DEFAULT 0,    -- BCWS, baseline + change scope
   forecast_at_completion REAL NOT NULL DEFAULT 0, -- EAC

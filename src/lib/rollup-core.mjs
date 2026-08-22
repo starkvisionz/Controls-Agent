@@ -138,7 +138,8 @@ export function recalculateProject(db, projectId) {
 
     const setAccount = db.prepare(
       `UPDATE cost_accounts
-          SET earned_value = ?, planned_value = ?, forecast_at_completion = ?
+          SET baseline_earned_value = ?, earned_value = ?, planned_value = ?,
+              forecast_at_completion = ?
         WHERE id = ?`
     );
 
@@ -159,10 +160,13 @@ export function recalculateProject(db, projectId) {
       const earned = baselineEarned + change;
 
       // Change scope enters planned value on the same profile it is earned on,
-      // which leaves SPI untouched by it. That is deliberate: until a change's
-      // activities are baselined into the schedule there is no plan for them to
-      // be measured against, and inventing one would move SPI on a commercial
-      // event rather than a schedule one.
+      // so it contributes nothing to cost variance until it is performed.
+      //
+      // Note this does NOT make the aggregate ratio change-neutral: adding the
+      // same amount to both sides moves (EV+c)/(PV+c) toward 1. The schedule
+      // index is therefore reported on the baseline pair below, which is also
+      // the correct treatment — until a change's activities are baselined into
+      // the schedule there is no plan to measure them against.
       const planned = account.baseline_planned_value + change;
 
       // CPI-based EAC, the convention projectMetrics() reports. Before any cost
@@ -170,14 +174,26 @@ export function recalculateProject(db, projectId) {
       const cpi = account.actual_cost > 0 ? earned / account.actual_cost : 0;
       const eac = cpi > 0 ? account.current_budget / cpi : account.current_budget;
 
-      setAccount.run(Math.round(earned), Math.round(planned), Math.round(eac), account.id);
+      setAccount.run(
+        Math.round(baselineEarned),
+        Math.round(earned),
+        Math.round(planned),
+        Math.round(eac),
+        account.id
+      );
     }
 
     // Keep the S-curve's live tip on the same numbers as the KPI row.
+    //
+    // Planned value belongs here too. It stopped being a constant the moment
+    // approved change scope started contributing to it, and updating only two
+    // of the three left the tip reporting a ratio the KPI row did not — the
+    // curve implied 0.954 against a headline of 0.941 on the seeded portfolio.
     const totals = db
       .prepare(
-        `SELECT COALESCE(SUM(earned_value), 0) AS ev,
-                COALESCE(SUM(actual_cost), 0)  AS ac
+        `SELECT COALESCE(SUM(planned_value), 0) AS pv,
+                COALESCE(SUM(earned_value), 0)  AS ev,
+                COALESCE(SUM(actual_cost), 0)   AS ac
            FROM cost_accounts WHERE project_id = ?`
       )
       .get(projectId);
@@ -187,7 +203,7 @@ export function recalculateProject(db, projectId) {
     if (project?.data_date) {
       db.prepare(
         `UPDATE evm_periods
-            SET earned_value = ?, actual_cost = ?
+            SET planned_value = ?, earned_value = ?, actual_cost = ?
           WHERE project_id = ?
             AND is_forecast = 0
             AND period_end = (
@@ -195,6 +211,7 @@ export function recalculateProject(db, projectId) {
                WHERE project_id = ? AND is_forecast = 0 AND period_end <= ?
             )`
       ).run(
+        Math.round(totals.pv),
         Math.round(totals.ev),
         Math.round(totals.ac),
         projectId,

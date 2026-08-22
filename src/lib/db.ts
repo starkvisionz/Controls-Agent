@@ -60,6 +60,7 @@ const ADDED_COLUMNS: Record<string, Record<string, string>> = {
   },
   cost_accounts: {
     baseline_planned_value: "REAL NOT NULL DEFAULT 0",
+    baseline_earned_value: "REAL NOT NULL DEFAULT 0",
   },
 };
 
@@ -76,6 +77,10 @@ const BACKFILL: Record<string, string> = {
   // nothing else — there was no change component to separate out.
   "cost_accounts.baseline_planned_value":
     "UPDATE cost_accounts SET baseline_planned_value = planned_value",
+  // Same reasoning: before the split there was no change component to remove.
+  // The next roll-up overwrites both with the derived figures anyway.
+  "cost_accounts.baseline_earned_value":
+    "UPDATE cost_accounts SET baseline_earned_value = earned_value",
 };
 
 export function migrate(db: Database.Database): void {

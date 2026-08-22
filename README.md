@@ -193,7 +193,9 @@ only after the first edit. Actual cost is deliberately outside the chain: it
 comes from the ledger, not from progress.
 
 `projectMetrics()` in `src/lib/queries.ts` is the single definition of SPI, CPI,
-EAC, ETC, VAC and TCPI on top of that roll-up.
+EAC, ETC, VAC and TCPI on top of that roll-up. The tip of the S-curve carries
+the same planned, earned and actual figures it reports — all three, not two of
+them, or the curve implies a performance index the headline does not.
 
 **The change register is where budgets come from.**
 `src/lib/change-orders-core.mjs` owns the step above that roll-up:
@@ -225,10 +227,24 @@ EV exactly where they were. It is a commercial event, not a performance one.
 Recording progress against the order is what earns it, and un-approving takes
 that earned value back out.
 
-Change scope enters planned value on the same profile it is earned on, which
-leaves SPI untouched by it. Until a change's activities are baselined into the
-schedule there is no plan for them to be measured against, and inventing one
-would move the schedule index on a commercial event.
+**Cost and schedule are measured on different scopes, on purpose.** Cost — CPI,
+CV, EAC, VAC, TCPI — uses the totals: every dollar spent is in actual cost,
+including dollars spent on change scope, so every dollar earned has to be there
+to match it. Schedule — SPI and SV — uses the baseline pair.
+
+That split is not decoration. Change scope enters planned value on the same
+profile it is earned on, which keeps it out of cost variance until it is
+performed; but adding the same amount to both sides drags `(EV+c)/(PV+c)`
+toward 1.0, so a schedule index measured on the totals would creep upward every
+time somebody booked progress against a change. A project reading 0.94 would
+appear to recover by performing work nobody had planned. Approved change scope
+has no schedule to be measured against until its activities are baselined, so
+it is not in the schedule index at all; the Changes view reports it separately,
+which is where scope outside the baseline belongs.
+
+`cost_accounts` therefore carries `baseline_planned_value` and
+`baseline_earned_value` alongside the totals — the same split
+`original_budget` / `current_budget` already has on the budget side.
 
 Pending change is kept out of the budget on purpose. A trend is exposure the
 project carries, not money it has, and the two never share a tile or a total —
