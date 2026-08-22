@@ -196,6 +196,8 @@ const changeOrderFields = {
     message: `must be one of: ${CHANGE_STATUSES.join(", ")}`,
   }),
   cost_impact: changeValue,
+  /** Progress on the change's own work — what earns it, once approved. */
+  percent_complete: percent,
   schedule_impact_days: days("schedule impact"),
   raised_date: isoDate,
   submitted_date: isoDate.nullish(),
@@ -213,6 +215,8 @@ export const changeOrderCreateSchema = z
     cost_impact: changeValue.optional(),
     schedule_impact_days: days("schedule impact").optional(),
     decision_date: z.null().optional(),
+    // Nothing is performed against scope nobody has approved yet.
+    percent_complete: z.literal(0).optional(),
   })
   .strict();
 
@@ -224,6 +228,7 @@ export const changeOrderPatchSchema = z
     origin: changeOrderFields.origin.optional(),
     status: changeOrderFields.status.optional(),
     cost_impact: changeValue.optional(),
+    percent_complete: percent.optional(),
     schedule_impact_days: days("schedule impact").optional(),
     submitted_date: changeOrderFields.submitted_date,
     decision_date: changeOrderFields.decision_date,
@@ -245,12 +250,23 @@ export function changeOrderRules(order: {
   status: string;
   cost_account_id: string | null;
   cost_impact: number;
+  percent_complete?: number;
   raised_date: string;
   submitted_date: string | null;
   decision_date: string | null;
 }): FieldError[] {
   const errors: FieldError[] = [];
   const decided = (DECIDED_STATUSES as readonly string[]).includes(order.status);
+
+  // Progress belongs to approved scope. Recording work against a trend would
+  // put earned value behind a change nobody has agreed to pay for, and
+  // un-approving an order has to take its progress with it.
+  if (order.status !== "approved" && (order.percent_complete ?? 0) > 0) {
+    errors.push({
+      field: "percent_complete",
+      message: "can only be recorded against an approved order",
+    });
+  }
 
   // Approving is the act that moves a budget, so it has to say which budget.
   if (order.status === "approved" && !order.cost_account_id) {

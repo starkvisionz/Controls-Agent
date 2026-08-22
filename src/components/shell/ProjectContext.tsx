@@ -9,6 +9,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
+import { usePersistedString } from "@/lib/persisted-flag";
 import type { Project, ProjectMetrics } from "@/lib/types";
 import type { Role } from "@/lib/rbac";
 
@@ -35,7 +36,7 @@ type ProjectContextValue = {
    * prevent, just moved into the client.
    */
   refresh: () => void;
-  loading: boolean;
+  /** Set only when an explicit refresh fails; the first load cannot fail here. */
   error: string | null;
 };
 
@@ -48,14 +49,40 @@ const STORAGE_KEY = "starkvisionz.activeProject";
  * view reads the active project from here, so switching projects in the title
  * bar re-points the entire application without a navigation.
  */
-export function ProjectProvider({ children }: { children: ReactNode }) {
-  const [projects, setProjects] = useState<ProjectWithMetrics[]>([]);
-  const [activeProjectId, setActiveId] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
+export function ProjectProvider({
+  children,
+  initialProjects,
+}: {
+  children: ReactNode;
+  /**
+   * The portfolio, resolved on the server and sent with the first HTML.
+   *
+   * The layout has already authenticated the request and knows which projects
+   * this account may see, so fetching the same list again from the browser was
+   * a round trip that bought nothing — and it was a *blocking* one: no view
+   * could ask for its own data until the active project was known, so every
+   * page load ran two requests in series behind a loading pane.
+   */
+  initialProjects: ProjectWithMetrics[];
+}) {
+  const [projects, setProjects] = useState<ProjectWithMetrics[]>(initialProjects);
   const [error, setError] = useState<string | null>(null);
   const [nonce, setNonce] = useState(0);
 
+  // The selection lives in localStorage and is derived from it, rather than
+  // being copied into state and restored in an effect. That keeps one source of
+  // truth, survives a reload, and follows the choice made in another tab.
+  const [remembered, remember] = usePersistedString(STORAGE_KEY);
+
+  // Falls back to the first project when nothing is remembered, and again when
+  // what was remembered is a project this account can no longer reach.
+  const activeProjectId =
+    (projects.find((p) => p.id === remembered) ?? projects[0])?.id ?? null;
+
+  // Only re-fetches on an explicit refresh() — after a write that moved the
+  // figures the status bar and switcher display.
   useEffect(() => {
+    if (nonce === 0) return;
     let cancelled = false;
 
     fetch("/api/projects")
@@ -69,19 +96,11 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
 
         // Only choose a project on the first load. A refresh must not pull the
         // user back to a different project mid-edit.
-        setActiveId((current) => {
-          if (current && list.some((p) => p.id === current)) return current;
-          const remembered =
-            typeof window !== "undefined" ? window.localStorage.getItem(STORAGE_KEY) : null;
-          return (list.find((p) => p.id === remembered) ?? list[0])?.id ?? null;
-        });
         setError(null);
-        setLoading(false);
       })
       .catch((err: unknown) => {
         if (cancelled) return;
         setError(err instanceof Error ? err.message : "Could not load the portfolio");
-        setLoading(false);
       });
 
     return () => {
@@ -91,14 +110,7 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
 
   const refresh = useCallback(() => setNonce((n) => n + 1), []);
 
-  const setActiveProjectId = useCallback((id: string) => {
-    setActiveId(id);
-    try {
-      window.localStorage.setItem(STORAGE_KEY, id);
-    } catch {
-      // Private browsing or blocked storage — the selection just won't persist.
-    }
-  }, []);
+  const setActiveProjectId = remember;
 
   const value = useMemo<ProjectContextValue>(
     () => ({
@@ -107,10 +119,9 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
       activeProjectId,
       setActiveProjectId,
       refresh,
-      loading,
       error,
     }),
-    [projects, activeProjectId, setActiveProjectId, refresh, loading, error]
+    [projects, activeProjectId, setActiveProjectId, refresh, error]
   );
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;

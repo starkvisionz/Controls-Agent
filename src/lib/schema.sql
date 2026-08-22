@@ -104,8 +104,13 @@ CREATE TABLE IF NOT EXISTS cost_accounts (
   current_budget    REAL NOT NULL DEFAULT 0,    -- original + approved changes
   committed         REAL NOT NULL DEFAULT 0,    -- POs + subcontracts placed
   actual_cost       REAL NOT NULL DEFAULT 0,    -- ACWP
-  earned_value      REAL NOT NULL DEFAULT 0,    -- BCWP
-  planned_value     REAL NOT NULL DEFAULT 0,    -- BCWS
+  -- Baseline and total are kept apart on both sides of the earned-value pair,
+  -- the way original_budget and current_budget already are. Approved change
+  -- scope earns on its own progress, not on the baseline scope's, so the two
+  -- components have to stay separable.
+  baseline_planned_value REAL NOT NULL DEFAULT 0, -- BCWS of the original scope
+  earned_value      REAL NOT NULL DEFAULT 0,    -- BCWP, baseline + change scope
+  planned_value     REAL NOT NULL DEFAULT 0,    -- BCWS, baseline + change scope
   forecast_at_completion REAL NOT NULL DEFAULT 0, -- EAC
   UNIQUE (project_id, code)
 );
@@ -234,6 +239,10 @@ CREATE TABLE IF NOT EXISTS change_orders (
   origin            TEXT NOT NULL,              -- Client | Internal | Vendor | Site Condition
   status            TEXT NOT NULL,              -- trend | submitted | approved | rejected
   cost_impact       REAL NOT NULL DEFAULT 0,
+  -- Progress on the change's own work. Approved scope enters the budget at
+  -- once and is earned only as it is performed, so this starts at zero and an
+  -- approval on its own moves no earned value.
+  percent_complete  REAL NOT NULL DEFAULT 0,
   schedule_impact_days INTEGER NOT NULL DEFAULT 0,
   raised_date       TEXT NOT NULL,
   submitted_date    TEXT,                       -- with raised/decision, gives cycle time

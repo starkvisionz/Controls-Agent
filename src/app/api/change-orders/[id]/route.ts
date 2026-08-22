@@ -79,10 +79,24 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }>
 
   // The cross-field rules read the row as it would be after the patch: a caller
   // may send only a status and still invert something against what is stored.
+  const status = patch.status ?? existing.status;
+
+  // Progress does not survive leaving "approved". An order sent back to
+  // submitted is scope nobody has agreed to any more, so the earned value it
+  // was carrying has to go with it rather than lingering as an orphan.
+  const percentComplete =
+    status === "approved" ? patch.percent_complete ?? existing.percent_complete : 0;
+
+  // The rules see what the caller ASKED for, not what would be stored. Dropping
+  // an explicit percent to zero and reporting success would be a silent
+  // rewrite: the caller would be told the progress was recorded when it was
+  // discarded. Only the implicit reset — the one that follows a status change —
+  // happens without complaint.
   const merged = {
-    status: patch.status ?? existing.status,
+    status,
     cost_account_id: allocation,
     cost_impact: patch.cost_impact ?? existing.cost_impact,
+    percent_complete: patch.percent_complete ?? percentComplete,
     raised_date: existing.raised_date,
     submitted_date:
       patch.submitted_date !== undefined ? patch.submitted_date ?? null : existing.submitted_date,
@@ -99,14 +113,13 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }>
   }
 
   const db = getDb();
-  const entries = Object.entries(patch);
+  // The reset above is part of the write, not a suggestion the caller may omit.
+  const entries = Object.entries({ ...patch, percent_complete: percentComplete });
 
   const write = db.transaction(() => {
-    if (entries.length > 0) {
-      db.prepare(
-        `UPDATE change_orders SET ${entries.map(([k]) => `${k} = ?`).join(", ")} WHERE id = ?`
-      ).run(...entries.map(([, v]) => (v === undefined ? null : (v as never))), id);
-    }
+    db.prepare(
+      `UPDATE change_orders SET ${entries.map(([k]) => `${k} = ?`).join(", ")} WHERE id = ?`
+    ).run(...entries.map(([, v]) => (v === undefined ? null : (v as never))), id);
 
     // The write is not finished until the budgets agree with the register.
     applyChangeOrders(existing.project_id, db);

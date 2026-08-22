@@ -239,6 +239,7 @@ export function ChangesView() {
                     <TH width="96px">Status</TH>
                     <TH width="110px">Account</TH>
                     <TH align="right" width="104px">Cost</TH>
+                    <TH align="right" width="72px">Earned</TH>
                     <TH align="right" width="64px">Days</TH>
                     <TH width="96px">Raised</TH>
                     <TH width="96px">Decided</TH>
@@ -267,6 +268,24 @@ export function ChangesView() {
                           className={c.cost_impact > 0 ? "text-warn" : "text-good"}
                         >
                           {money(c.cost_impact, { sign: true, compact: true })}
+                        </TD>
+                        <TD
+                          align="right"
+                          mono
+                          className={
+                            c.status !== "approved"
+                              ? "text-ink-faint"
+                              : c.percent_complete > 0
+                                ? "text-ink-mute"
+                                : "text-ink-faint"
+                          }
+                          title={
+                            c.status === "approved"
+                              ? "Progress on this change's own work — approved scope earns only as it is performed"
+                              : "Only approved scope earns"
+                          }
+                        >
+                          {c.status === "approved" ? percent(c.percent_complete, 0) : "—"}
                         </TD>
                         <TD
                           align="right"

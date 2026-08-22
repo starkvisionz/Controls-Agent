@@ -163,6 +163,8 @@ export type ChangeOrder = {
   origin: string;
   status: string;
   cost_impact: number;
+  /** Progress on the change's own work. Only approved scope earns. */
+  percent_complete: number;
   /** Recorded, and deliberately not applied to any forecast date. */
   schedule_impact_days: number;
   raised_date: string;

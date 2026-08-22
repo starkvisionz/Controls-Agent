@@ -7,7 +7,8 @@
  *
  *   activity % complete
  *     -> budget-weighted progress of the WBS node
- *     -> control-account earned value (node progress x account budget)
+ *     -> control-account earned value (node progress x ORIGINAL budget,
+ *        plus progress recorded on approved change scope)
  *     -> forecast at completion (budget / CPI)
  *     -> the EVM period sitting at the data date
  *     -> projectMetrics(), and therefore every view and the agent briefing
@@ -23,6 +24,35 @@
  * Plain JavaScript so the TypeScript app and the Node seed script can share one
  * implementation instead of maintaining two that drift.
  */
+
+/**
+ * Earned value on approved change scope, by control account.
+ *
+ * A change order is a package of work with its own progress. Approving one adds
+ * its value to the budget immediately — the commitment is real the moment it is
+ * agreed — but none of it is earned until the work is done, so an order sits at
+ * 0% until somebody records progress against it.
+ *
+ * Only approved orders count. A trend is exposure the project carries, not
+ * scope it has been told to build.
+ *
+ * @param {import("better-sqlite3").Database} db
+ * @param {string} projectId
+ * @returns {Map<string, number>} account id -> earned value on change scope
+ */
+function earnedOnChanges(db, projectId) {
+  const rows = db
+    .prepare(
+      `SELECT cost_account_id AS accountId,
+              COALESCE(SUM(cost_impact * percent_complete / 100.0), 0) AS earned
+         FROM change_orders
+        WHERE project_id = ? AND status = 'approved' AND cost_account_id IS NOT NULL
+        GROUP BY cost_account_id`
+    )
+    .all(projectId);
+
+  return new Map(rows.map((r) => [r.accountId, r.earned]));
+}
 
 /**
  * Budget-weighted percent complete for every WBS node, from its activities and
@@ -97,14 +127,18 @@ export function recalculateProject(db, projectId) {
 
     const accounts = db
       .prepare(
-        `SELECT id, wbs_id, current_budget, actual_cost
+        `SELECT id, wbs_id, original_budget, current_budget, baseline_planned_value, actual_cost
            FROM cost_accounts WHERE project_id = ?`
       )
       .all(projectId);
 
+    // Progress on approved change scope, which is earned on its own record
+    // rather than on the baseline schedule's. See changeEarned() below.
+    const changeEarned = earnedOnChanges(db, projectId);
+
     const setAccount = db.prepare(
       `UPDATE cost_accounts
-          SET earned_value = ?, forecast_at_completion = ?
+          SET earned_value = ?, planned_value = ?, forecast_at_completion = ?
         WHERE id = ?`
     );
 
@@ -114,14 +148,29 @@ export function recalculateProject(db, projectId) {
       // An account whose WBS branch holds no budgeted activity has no schedule
       // to earn against; leave it at zero rather than inventing progress.
       const fraction = node && node.budget > 0 ? node.earned / node.budget : 0;
-      const earned = account.current_budget * fraction;
+
+      // The baseline scope earns against the ORIGINAL budget, not the current
+      // one. Earning the current budget at the schedule's fraction is what made
+      // approving a change order raise earned value on the spot: the same
+      // physical progress, applied to a bigger number, reads as work performed
+      // that nobody performed.
+      const baselineEarned = account.original_budget * fraction;
+      const change = changeEarned.get(account.id) ?? 0;
+      const earned = baselineEarned + change;
+
+      // Change scope enters planned value on the same profile it is earned on,
+      // which leaves SPI untouched by it. That is deliberate: until a change's
+      // activities are baselined into the schedule there is no plan for them to
+      // be measured against, and inventing one would move SPI on a commercial
+      // event rather than a schedule one.
+      const planned = account.baseline_planned_value + change;
 
       // CPI-based EAC, the convention projectMetrics() reports. Before any cost
       // is booked there is no performance signal, so the budget stands.
       const cpi = account.actual_cost > 0 ? earned / account.actual_cost : 0;
       const eac = cpi > 0 ? account.current_budget / cpi : account.current_budget;
 
-      setAccount.run(Math.round(earned), Math.round(eac), account.id);
+      setAccount.run(Math.round(earned), Math.round(planned), Math.round(eac), account.id);
     }
 
     // Keep the S-curve's live tip on the same numbers as the KPI row.

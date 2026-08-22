@@ -444,8 +444,16 @@ check(
 );
 check("no approved order is left unallocated", register.summary.unallocatedApproved === 0);
 
-const open = register.changeOrders.find((c) => c.status === "trend" && c.cost_account_id);
-check("found an open order to decide", Boolean(open), open?.code);
+// Any open order will do — the precondition is that it is undecided and priced
+// against an account, not which of the two open statuses it happens to hold.
+const open = register.changeOrders.find(
+  (c) => (c.status === "trend" || c.status === "submitted") && c.cost_account_id
+);
+check("found an open order to decide", Boolean(open), `${open?.code} (${open?.status})`);
+if (!open) {
+  console.error("\nsmoke: the seeded register has no open, allocated order to decide.");
+  process.exit(1);
+}
 
 const patchOrder = (headers, body, id = open.id) =>
   get(`/api/change-orders/${id}`, { method: "PATCH", headers, body: JSON.stringify(body) });
@@ -486,11 +494,82 @@ check(
   Math.round(approved.metrics.bac - beforeChange.bac) === Math.round(open.cost_impact),
   `${Math.round(beforeChange.bac).toLocaleString()} -> ${Math.round(approved.metrics.bac).toLocaleString()}`
 );
+// The correction that matters: approval is a commercial event, not a
+// performance one. Earning the *current* budget at the schedule's progress
+// fraction used to raise earned value the moment an order was approved — the
+// same physical work, applied to a bigger number, reading as work performed.
 check(
-  "CPI moved with it",
-  approved.metrics.cpi !== beforeChange.cpi,
+  "approving earned no value on its own",
+  Math.round(approved.metrics.ev) === Math.round(beforeChange.ev),
+  `EV ${Math.round(beforeChange.ev).toLocaleString()} -> ${Math.round(approved.metrics.ev).toLocaleString()}`
+);
+check(
+  "approving did not move CPI",
+  approved.metrics.cpi.toFixed(6) === beforeChange.cpi.toFixed(6),
   `${beforeChange.cpi.toFixed(4)} -> ${approved.metrics.cpi.toFixed(4)}`
 );
+check(
+  "approving did not move SPI",
+  approved.metrics.spi.toFixed(6) === beforeChange.spi.toFixed(6),
+  `${beforeChange.spi.toFixed(4)} -> ${approved.metrics.spi.toFixed(4)}`
+);
+check(
+  "the forecast at completion rose by the order's value",
+  Math.round(approved.metrics.eac - beforeChange.eac) > 0,
+  `EAC ${Math.round(beforeChange.eac).toLocaleString()} -> ${Math.round(approved.metrics.eac).toLocaleString()}`
+);
+
+// ...and the other half: change scope earns as it is performed, not before.
+const halfDone = await get(`/api/change-orders/${open.id}`, {
+  method: "PATCH",
+  headers: authed,
+  body: JSON.stringify({ percent_complete: 50 }),
+});
+check("progress may be recorded against approved scope", halfDone.status === 200, `status ${halfDone.status}`);
+
+const half = await halfDone.json();
+check(
+  "performing half the change earned half its value",
+  Math.abs(half.metrics.ev - approved.metrics.ev - open.cost_impact / 2) < 2,
+  `EV +${Math.round(half.metrics.ev - approved.metrics.ev).toLocaleString()} of ${Math.round(open.cost_impact).toLocaleString()}`
+);
+check(
+  "performing it moved CPI",
+  half.metrics.cpi > approved.metrics.cpi,
+  `${approved.metrics.cpi.toFixed(4)} -> ${half.metrics.cpi.toFixed(4)}`
+);
+
+// Progress belongs to approved scope. An order sent back to submitted is scope
+// nobody has agreed to any more, so its earned value goes with it.
+const unapprove = await get(`/api/change-orders/${open.id}`, {
+  method: "PATCH",
+  headers: authed,
+  body: JSON.stringify({ status: "submitted", decision_date: null }),
+});
+const unapproved = await unapprove.json();
+check(
+  "un-approving took its earned value with it",
+  Math.round(unapproved.metrics.ev) === Math.round(beforeChange.ev) &&
+    unapproved.changeOrder.percent_complete === 0,
+  `EV back to ${Math.round(unapproved.metrics.ev).toLocaleString()}, progress ${unapproved.changeOrder.percent_complete}%`
+);
+check(
+  "recording progress against an open order is refused",
+  (
+    await get(`/api/change-orders/${open.id}`, {
+      method: "PATCH",
+      headers: authed,
+      body: JSON.stringify({ percent_complete: 40 }),
+    })
+  ).status === 422
+);
+
+// Put it back where the rest of this section expects to find it.
+await get(`/api/change-orders/${open.id}`, {
+  method: "PATCH",
+  headers: authed,
+  body: JSON.stringify({ status: "approved", decision_date: "2026-07-01" }),
+});
 check(
   "the account's own budget carries the change",
   approved.changeOrders.find((c) => c.id === open.id)?.status === "approved"

@@ -3,13 +3,13 @@
 import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { usePersistedFlag } from "@/lib/persisted-flag";
 import { Group, Panel, Separator, useDefaultLayout } from "react-resizable-panels";
-import { ProjectProvider, useProjects } from "./ProjectContext";
+import { ProjectProvider, useProjects, type ProjectWithMetrics } from "./ProjectContext";
 import { SessionProvider } from "./SessionContext";
 import { Sidebar } from "./Sidebar";
 import { StatusBar } from "./StatusBar";
 import { TitleBar } from "./TitleBar";
 import { AgentPanel } from "@/components/chat/AgentPanel";
-import { LoadingPane, StateMessage } from "@/components/ui/Controls";
+import { StateMessage } from "@/components/ui/Controls";
 import { PasswordGate } from "./PasswordGate";
 import type { Principal } from "@/lib/rbac";
 
@@ -44,11 +44,14 @@ const safeStorage = {
 export function DesktopShell({
   children,
   principal,
+  projects,
   authEnforced,
   mustChangePassword,
 }: {
   children: ReactNode;
   principal: Principal;
+  /** Resolved server-side, so the first paint already has the portfolio. */
+  projects: ProjectWithMetrics[];
   authEnforced: boolean;
   mustChangePassword: boolean;
 }) {
@@ -63,7 +66,7 @@ export function DesktopShell({
       {mustChangePassword ? (
         <PasswordGate name={principal.name} />
       ) : (
-        <ProjectProvider>
+        <ProjectProvider initialProjects={projects}>
           <ShellFrame>{children}</ShellFrame>
         </ProjectProvider>
       )}
@@ -72,7 +75,7 @@ export function DesktopShell({
 }
 
 function ShellFrame({ children }: { children: ReactNode }) {
-  const { loading, error } = useProjects();
+  const { projects, error } = useProjects();
   const [collapsed, setCollapsed] = usePersistedFlag(CHROME_KEYS.collapsed, false);
   const [agentOpen, setAgentOpen] = usePersistedFlag(CHROME_KEYS.agentOpen, true);
   const [agentSource, setAgentSource] = useState<"claude" | "local" | null>(null);
@@ -107,12 +110,15 @@ function ShellFrame({ children }: { children: ReactNode }) {
         <Sidebar collapsed={collapsed} onToggle={toggleSidebar} badges={{}} />
 
         <div className="min-w-0 flex-1">
-          {loading ? (
-            <LoadingPane label="Opening the controls database" />
-          ) : error ? (
+          {error ? (
             <StateMessage
               title="The controls database is unavailable"
               detail={`${error}. Run \`npm run db:seed\` to build it, then reload.`}
+            />
+          ) : projects.length === 0 ? (
+            <StateMessage
+              title="No projects to show"
+              detail="Either the database has not been seeded — run `npm run db:seed` — or this account has not been given access to any project."
             />
           ) : (
             <Group

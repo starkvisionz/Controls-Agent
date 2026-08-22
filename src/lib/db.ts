@@ -56,7 +56,26 @@ const ADDED_COLUMNS: Record<string, Record<string, string>> = {
     client_ref: "TEXT NOT NULL DEFAULT ''",
     submitted_date: "TEXT",
     owner: "TEXT NOT NULL DEFAULT ''",
+    percent_complete: "REAL NOT NULL DEFAULT 0",
   },
+  cost_accounts: {
+    baseline_planned_value: "REAL NOT NULL DEFAULT 0",
+  },
+};
+
+/**
+ * Run once, immediately after the column it depends on is added.
+ *
+ * `ALTER TABLE ... ADD COLUMN` can only supply a constant default, so a column
+ * that has to start out holding existing data needs a statement of its own.
+ * Keyed by "table.column" and skipped entirely when that column was already
+ * there, which is what keeps this idempotent.
+ */
+const BACKFILL: Record<string, string> = {
+  // Before this column existed, `planned_value` held the baseline figure and
+  // nothing else — there was no change component to separate out.
+  "cost_accounts.baseline_planned_value":
+    "UPDATE cost_accounts SET baseline_planned_value = planned_value",
 };
 
 export function migrate(db: Database.Database): void {
@@ -67,6 +86,9 @@ export function migrate(db: Database.Database): void {
     for (const [column, definition] of Object.entries(columns)) {
       if (existing.has(column)) continue;
       db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+
+      const backfill = BACKFILL[`${table}.${column}`];
+      if (backfill) db.exec(backfill);
     }
   }
 }

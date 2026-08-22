@@ -3,7 +3,7 @@
 import { useCallback, useSyncExternalStore } from "react";
 
 /**
- * A boolean that survives a reload, read through `useSyncExternalStore`.
+ * Values that survive a reload, read through `useSyncExternalStore`.
  *
  * The obvious implementation — default state, then restore from localStorage in
  * an effect — costs a second render on every mount and is exactly the
@@ -67,6 +67,41 @@ export function usePersistedFlag(
     },
     [key, fallback]
   );
+
+  return [value, set];
+}
+
+// ---------------------------------------------------------------------------
+
+function readString(key: string): string | null {
+  try {
+    return window.localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+
+function writeString(key: string, value: string): void {
+  try {
+    window.localStorage.setItem(key, value);
+  } catch {
+    // Non-fatal: the selection applies for this session and is not remembered.
+  }
+  notify();
+}
+
+/**
+ * The string equivalent, for a remembered selection rather than a toggle.
+ *
+ * Returns null on the server and until hydration, which is what lets the caller
+ * fall back to a default without the markup disagreeing with itself.
+ */
+export function usePersistedString(key: string): [string | null, (next: string) => void] {
+  const getSnapshot = useCallback(() => readString(key), [key]);
+  const getServerSnapshot = useCallback(() => null, []);
+
+  const value = useSyncExternalStore(subscribe, getSnapshot, getServerSnapshot);
+  const set = useCallback((next: string) => writeString(key, next), [key]);
 
   return [value, set];
 }
