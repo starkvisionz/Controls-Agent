@@ -288,10 +288,12 @@ const insertTask = db.prepare(`
 const insertCostAccount = db.prepare(`
   INSERT INTO cost_accounts (id, project_id, wbs_id, code, name, category, cost_type,
     original_budget, approved_changes, current_budget, committed, actual_cost,
-    earned_value, planned_value, forecast_at_completion)
+    earned_value, baseline_earned_value, baseline_planned_value, planned_value,
+    forecast_at_completion)
   VALUES (@id, @project_id, @wbs_id, @code, @name, @category, @cost_type,
     @original_budget, @approved_changes, @current_budget, @committed, @actual_cost,
-    @earned_value, @planned_value, @forecast_at_completion)`);
+    @earned_value, @baseline_earned_value, @baseline_planned_value, @planned_value,
+    @forecast_at_completion)`);
 
 const insertCostEntry = db.prepare(`
   INSERT INTO cost_entries (id, project_id, cost_account_id, entry_date, entry_type,
@@ -325,11 +327,11 @@ const insertDoc = db.prepare(`
 
 const insertChangeOrder = db.prepare(`
   INSERT INTO change_orders (id, project_id, cost_account_id, code, client_ref, title, origin,
-    status, cost_impact, schedule_impact_days, raised_date, submitted_date, decision_date,
-    owner, description)
+    status, cost_impact, percent_complete, schedule_impact_days, raised_date, submitted_date,
+    decision_date, owner, description)
   VALUES (@id, @project_id, @cost_account_id, @code, @client_ref, @title, @origin,
-    @status, @cost_impact, @schedule_impact_days, @raised_date, @submitted_date, @decision_date,
-    @owner, @description)`);
+    @status, @cost_impact, @percent_complete, @schedule_impact_days, @raised_date, @submitted_date,
+    @decision_date, @owner, @description)`);
 
 const insertConversation = db.prepare(`
   INSERT INTO conversations (id, project_id, title) VALUES (?, ?, ?)`);
@@ -491,6 +493,10 @@ function seedProject(p) {
       committed: 0,
       actual_cost: 0,
       earned_value: 0,
+      baseline_earned_value: 0,
+      // Both start at the baseline figure; the roll-up adds the change
+      // component to planned_value once change scope is earned against.
+      baseline_planned_value: round(d.pv),
       planned_value: round(d.pv),
       forecast_at_completion: currentBudget,
     };
@@ -657,6 +663,7 @@ function seedProject(p) {
       is_milestone: 1,
       budget: 0,
       earned_value: 0,
+      baseline_earned_value: 0,
       actual_cost: 0,
       predecessors: "",
       notes: "",
@@ -664,35 +671,82 @@ function seedProject(p) {
     });
   });
 
+  // The change register exists before the money is reconciled, so the earned
+  // value the targeting below measures already includes performed change
+  // scope. Seeding it afterwards meant targeting one basis and reporting
+  // another, and needing a correction pass to paper over the difference.
+  seedChangeOrders(p, elapsed, accounts);
+
   // ---- Reconcile the money to the schedule ------------------------------
   // Earned value now comes only from activity progress, via the same roll-up
   // the API runs. To still land each project on its intended SPI and CPI, the
   // knobs are the inputs to that roll-up rather than its outputs: scale the
   // activity percents until the derived EV hits the target against PV, then
   // shape actual cost around the resulting EV.
-  const projectPv = accounts.reduce((total, a) => total + a.planned_value, 0);
+  // The baseline pair, because that is the scope projectMetrics() reports SPI
+  // on. Targeting the totals would aim at a number the dashboard never shows.
+  const projectPv = db
+    .prepare(
+      `SELECT COALESCE(SUM(baseline_planned_value), 0) AS pv
+         FROM cost_accounts WHERE project_id = ?`
+    )
+    .get(p.id).pv;
 
-  const scaleTaskProgress = db.prepare(
-    `UPDATE tasks
-        SET percent_complete = MAX(0, MIN(100, percent_complete * ?)),
-            earned_value = budget * (MAX(0, MIN(100, percent_complete * ?)) / 100.0)
-      WHERE project_id = ? AND is_milestone = 0`
+  // Scaling is applied to the ORIGINAL percentages every time, never compounded
+  // onto the last result. Compounding ratchets: once an activity clamps at 100%
+  // the value it was scaled from is lost, so scaling back down starts from 100
+  // rather than from where it was, and the loop oscillates instead of settling
+  // — the answer then depends on how many passes it happened to run.
+  const basePercent = db
+    .prepare(
+      `SELECT id, percent_complete FROM tasks WHERE project_id = ? AND is_milestone = 0`
+    )
+    .all(p.id)
+    .map((t) => [t.id, t.percent_complete]);
+
+  const setPercent = db.prepare(
+    `UPDATE tasks SET percent_complete = ?, earned_value = budget * (? / 100.0) WHERE id = ?`
   );
 
+  const applyScale = (k) => {
+    for (const [id, base] of basePercent) {
+      const pct = clamp(base * k, 0, 100);
+      setPercent.run(pct, pct, id);
+    }
+    recalculateProject(db, p.id);
+  };
+
+  // Baseline earned value — the SPI numerator. Actual cost is shaped against
+  // total earned value further down, because CPI is measured on the totals.
   const currentEv = () =>
+    db
+      .prepare(
+        `SELECT COALESCE(SUM(baseline_earned_value), 0) AS ev
+           FROM cost_accounts WHERE project_id = ?`
+      )
+      .get(p.id).ev;
+
+  const totalEv = () =>
     db
       .prepare(`SELECT COALESCE(SUM(earned_value), 0) AS ev FROM cost_accounts WHERE project_id = ?`)
       .get(p.id).ev;
 
-  // Clamping at 100% makes this non-linear, so iterate rather than solving once.
-  recalculateProject(db, p.id);
-  for (let pass = 0; pass < 12; pass++) {
+  // Earned value rises monotonically with the scale factor, so bisection
+  // converges on the achievable answer rather than hunting around it.
+  const targetEv = p.spi * projectPv;
+  let low = 0;
+  let high = 8;
+  for (let pass = 0; pass < 40; pass++) {
+    const mid = (low + high) / 2;
+    applyScale(mid);
     const ev = currentEv();
-    if (ev <= 0) break;
-    const k = (p.spi * projectPv) / ev;
-    if (Math.abs(k - 1) < 0.0005) break;
-    scaleTaskProgress.run(k, k, p.id);
-    recalculateProject(db, p.id);
+    if (Math.abs(ev - targetEv) < targetEv * 0.0002) break;
+    if (ev < targetEv) low = mid;
+    else high = mid;
+  }
+  if (process.env.SEED_DEBUG) {
+    const ev = currentEv();
+    console.log(`  [debug] ${p.code} target SPI ${p.spi} -> achieved ${(ev / projectPv).toFixed(4)} (ev ${Math.round(ev)}, pv ${Math.round(projectPv)})`);
   }
 
   // Actual cost: give each account the performance it was drafted with, then
@@ -713,7 +767,7 @@ function seedProject(p) {
     rawAcTotal += acc.rawAc;
   }
 
-  const projectEv = currentEv();
+  const projectEv = totalEv();
   const acScale = rawAcTotal > 0 ? projectEv / p.cpi / rawAcTotal : 1;
 
   const setActuals = db.prepare(
@@ -1223,6 +1277,7 @@ function seedChangeOrders(p, elapsed, accounts) {
 
     const raised = raisedOn();
     const submitted = addDays(raised, intBetween(5, 24));
+    const decided = addDays(submitted, intBetween(9, 55));
     const { id, code } = next();
 
     insertChangeOrder.run({
@@ -1235,10 +1290,15 @@ function seedChangeOrders(p, elapsed, accounts) {
       origin,
       status: "approved",
       cost_impact: account.approved_changes,
+      // Progress on the change's own work. Approved scope is budgeted at once
+      // and earned only as it is performed, so a change agreed months ago is
+      // largely done and one agreed last month has barely started — which is
+      // what makes the earned column mean something on the demo.
+      percent_complete: performedSince(decided, elapsed),
       schedule_impact_days: isSaving ? -intBetween(0, 10) : intBetween(0, 28),
       raised_date: raised,
       submitted_date: submitted,
-      decision_date: addDays(submitted, intBetween(9, 55)),
+      decision_date: decided,
       owner: pick(CHANGE_OWNERS),
       description,
     });
@@ -1250,7 +1310,10 @@ function seedChangeOrders(p, elapsed, accounts) {
     const [title, origin, description] = library(libraryIndex);
     libraryIndex += 1;
 
-    const status = pick(["trend", "trend", "submitted", "submitted", "rejected"]);
+    // Cycled rather than drawn at random: every project needs at least one of
+    // each so the status filters on the Changes page all have something behind
+    // them. A random draw left one project with no trends at all.
+    const status = ["trend", "submitted", "rejected", "trend", "submitted"][i % 5];
     const isSaving = title.includes("value engineering");
     const raised = raisedOn();
     const submitted = status === "trend" ? null : addDays(raised, intBetween(5, 24));
@@ -1268,6 +1331,8 @@ function seedChangeOrders(p, elapsed, accounts) {
       origin,
       status,
       cost_impact: round(p.bac * between(0.001, 0.012)) * (isSaving ? -1 : 1),
+      // Nothing is performed against scope nobody has approved.
+      percent_complete: 0,
       schedule_impact_days: isSaving ? -intBetween(0, 10) : intBetween(0, 28),
       raised_date: raised,
       submitted_date: submitted,
@@ -1277,9 +1342,25 @@ function seedChangeOrders(p, elapsed, accounts) {
     });
   }
 
-  // 3. Derive the budgets from what was just written. The figures should not
+  // 3. Derive the budgets from what was just written. The budgets should not
   //    move — if they do, the register and the budget had disagreed.
   applyChangeOrders(db, p.id);
+}
+
+/**
+ * How much of a change agreed on `decided` has been performed by the data date.
+ *
+ * Ramped over a share of the elapsed project duration rather than a fixed
+ * number of days, so the spread holds on a job that is two years in and one
+ * that is three months in. Jittered, because change orders do not all execute
+ * at the same rate, and rounded to the 5% a progress review actually reports.
+ */
+function performedSince(decided, elapsed) {
+  const days = daysBetween(decided, DATA_DATE);
+  if (!Number.isFinite(days) || days <= 0) return 0;
+
+  const window = Math.max(60, elapsed * 0.55);
+  return clamp(Math.round((days / window) * between(0.75, 1.15) * 20) * 5, 0, 100);
 }
 
 // --------------------------------------------------------------------------
@@ -1429,10 +1510,9 @@ const build = db.transaction(() => {
     // Reset per project: otherwise adding a risk to one project silently
     // shifts every figure in the next one.
     _seed = seedFor(p.code);
-    const { level2, accounts, totals, elapsed } = seedProject(p);
+    const { level2, totals, elapsed } = seedProject(p);
     seedRisks(p, level2, elapsed);
     seedDocuments(p, level2, elapsed);
-    seedChangeOrders(p, elapsed, accounts);
     seedConversation(p, totals);
   }
 });
@@ -1470,15 +1550,18 @@ if (demoUsers.length > 0) {
 console.log("\n  Performance roll-up:\n");
 for (const row of db.prepare(`
   SELECT p.code, p.name,
-         SUM(c.planned_value)  AS pv,
-         SUM(c.earned_value)   AS ev,
+         SUM(c.baseline_planned_value) AS pv,
+         SUM(c.baseline_earned_value)  AS ev,
+         SUM(c.earned_value)   AS totalEv,
          SUM(c.actual_cost)    AS ac,
          SUM(c.current_budget) AS bac
     FROM projects p JOIN cost_accounts c ON c.project_id = p.id
    GROUP BY p.id ORDER BY p.code`).all()) {
+  // The same basis projectMetrics() reports: schedule on the baseline pair,
+  // cost on the totals.
   const spi = (row.ev / row.pv).toFixed(3);
-  const cpi = (row.ev / row.ac).toFixed(3);
-  const pct = ((row.ev / row.bac) * 100).toFixed(1);
+  const cpi = (row.totalEv / row.ac).toFixed(3);
+  const pct = ((row.totalEv / row.bac) * 100).toFixed(1);
   console.log(
     `    ${row.code}  SPI ${spi}  CPI ${cpi}  ${pct.padStart(5)}% complete  BAC $${(row.bac / 1e6).toFixed(1)}M`
   );

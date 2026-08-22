@@ -114,7 +114,7 @@ cannot cite a number the tables do not support.
 | Project | Contract | Phase | SPI | CPI | Reads as |
 |---|---|---|---|---|---|
 | **GC-4410** Gulf Coast LNG — Train 4 | $486M LSTK | Construction | 0.941 | 0.968 | Behind schedule, modestly over cost |
-| **NV-2208** Silver Basin Solar + Storage | $268M EPCM | Construction | 1.017 | 1.011 | Ahead of plan on both |
+| **NV-2208** Silver Basin Solar + Storage | $268M EPCM | Construction | 1.028 | 1.011 | Ahead of plan on both |
 | **AB-1750** Scotford Blue Hydrogen | $158M Cost-Plus | Engineering | 0.972 | 0.938 | Early, with cost pressure already |
 
 The generator is deterministic — a fixed PRNG seed per project code — so the
@@ -179,7 +179,8 @@ the only path from schedule to cost:
 ```
 activity % complete
   -> budget-weighted progress of the WBS node
-  -> control-account earned value
+  -> control-account earned value  (progress x ORIGINAL budget,
+     plus progress recorded on approved change scope)
   -> forecast at completion
   -> the EVM period at the data date
   -> projectMetrics(), and so every view and the agent briefing
@@ -192,7 +193,9 @@ only after the first edit. Actual cost is deliberately outside the chain: it
 comes from the ledger, not from progress.
 
 `projectMetrics()` in `src/lib/queries.ts` is the single definition of SPI, CPI,
-EAC, ETC, VAC and TCPI on top of that roll-up.
+EAC, ETC, VAC and TCPI on top of that roll-up. The tip of the S-curve carries
+the same planned, earned and actual figures it reports — all three, not two of
+them, or the curve implies a performance index the headline does not.
 
 **The change register is where budgets come from.**
 `src/lib/change-orders-core.mjs` owns the step above that roll-up:
@@ -210,6 +213,38 @@ scratch rather than applying deltas, so an order that is rejected after approval
 stranding it. Approving therefore requires an allocation: you cannot add to a
 budget without saying which budget, and the account named must belong to the
 same project.
+
+**Approved scope is budgeted at once and earned as it is performed.** Baseline
+scope earns against the *original* budget at the schedule's progress fraction;
+approved change scope earns against its own recorded progress, which starts at
+zero. Earning the *current* budget at the schedule's fraction — the obvious
+implementation, and the one this had first — makes approving an order raise
+earned value on the spot: the same physical progress, applied to a bigger
+number, reading as work that nobody performed.
+
+So approving moves BAC and the forecast at completion and leaves SPI, CPI and
+EV exactly where they were. It is a commercial event, not a performance one.
+Recording progress against the order is what earns it, and un-approving takes
+that earned value back out.
+
+**Cost and schedule are measured on different scopes, on purpose.** Cost — CPI,
+CV, EAC, VAC, TCPI — uses the totals: every dollar spent is in actual cost,
+including dollars spent on change scope, so every dollar earned has to be there
+to match it. Schedule — SPI and SV — uses the baseline pair.
+
+That split is not decoration. Change scope enters planned value on the same
+profile it is earned on, which keeps it out of cost variance until it is
+performed; but adding the same amount to both sides drags `(EV+c)/(PV+c)`
+toward 1.0, so a schedule index measured on the totals would creep upward every
+time somebody booked progress against a change. A project reading 0.94 would
+appear to recover by performing work nobody had planned. Approved change scope
+has no schedule to be measured against until its activities are baselined, so
+it is not in the schedule index at all; the Changes view reports it separately,
+which is where scope outside the baseline belongs.
+
+`cost_accounts` therefore carries `baseline_planned_value` and
+`baseline_earned_value` alongside the totals — the same split
+`original_budget` / `current_budget` already has on the budget side.
 
 Pending change is kept out of the budget on purpose. A trend is exposure the
 project carries, not money it has, and the two never share a tile or a total —
@@ -245,6 +280,20 @@ where a since-revoked session is actually caught.
 plain-text snapshot of the project from the current tables and hands that to the
 model as its only source of fact. Answers stay current without the agent needing
 query access.
+
+**The portfolio ships with the page, not after it.** The layout has already
+authenticated the request and knows which projects the account may see, so
+fetching that list again from the browser bought nothing and cost a *blocking*
+round trip: no view could ask for its own data until the active project was
+known, so every page load ran two requests in series behind a loading pane. The
+list now travels with the first HTML. Measured against the previous build, time
+to content: dashboard 997 ms → ~600, schedule 631 → ~375, cost 643 → ~360,
+changes 495 → ~380.
+
+If the app feels slow, check which server is running. `npm run dev` compiles
+each route on demand and ships unminified bundles — 4–6 seconds and ~2 MB of
+JavaScript per first visit, against 0.4–0.6 seconds and ~10 kB from `npm start`.
+That gap is dev mode working as intended, not the app.
 
 **Charts never carry two scales.** Where two measures differ by an order of
 magnitude — period spend against cumulative cost — they get two charts rather

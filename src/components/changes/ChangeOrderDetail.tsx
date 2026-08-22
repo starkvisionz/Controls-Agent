@@ -6,7 +6,7 @@ import { Badge } from "@/components/ui/Badge";
 import { ReadOnlyNote } from "@/components/ui/Controls";
 import { useSession } from "@/components/shell/SessionContext";
 import { ROLE_LABELS } from "@/lib/rbac";
-import { money, shortDate } from "@/lib/format";
+import { money, percent as formatPercent, shortDate } from "@/lib/format";
 import { CHANGE_STATUSES, changeOrderRules, type FieldError } from "@/lib/validation";
 import type { ChangeOrderRow, ProjectMetrics } from "@/lib/types";
 import { STATUS_TONE } from "./ChangesView";
@@ -45,6 +45,7 @@ export function ChangeOrderDetail({
   const [days, setDays] = useState(String(order.schedule_impact_days));
   const [decisionDate, setDecisionDate] = useState(order.decision_date ?? "");
   const [submittedDate, setSubmittedDate] = useState(order.submitted_date ?? "");
+  const [progress, setProgress] = useState(order.percent_complete);
   const [saving, setSaving] = useState(false);
   const [errors, setErrors] = useState<FieldError[]>([]);
 
@@ -57,7 +58,8 @@ export function ChangeOrderDetail({
     numericValue !== order.cost_impact ||
     numericDays !== order.schedule_impact_days ||
     decisionDate !== (order.decision_date ?? "") ||
-    submittedDate !== (order.submitted_date ?? "");
+    submittedDate !== (order.submitted_date ?? "") ||
+    progress !== order.percent_complete;
 
   // The same cross-field rules the route runs, so the button is honest about
   // what will happen when it is pressed.
@@ -65,6 +67,9 @@ export function ChangeOrderDetail({
     status,
     cost_account_id: accountId || null,
     cost_impact: Number.isFinite(numericValue) ? numericValue : 0,
+    // The route zeroes progress on anything that is not approved, so the form
+    // shows the value that will actually be stored rather than the one on screen.
+    percent_complete: status === "approved" ? progress : 0,
     raised_date: order.raised_date,
     submitted_date: submittedDate || null,
     decision_date: decisionDate || null,
@@ -88,6 +93,7 @@ export function ChangeOrderDetail({
           status,
           cost_account_id: accountId || null,
           cost_impact: numericValue,
+          percent_complete: status === "approved" ? progress : 0,
           schedule_impact_days: numericDays,
           submitted_date: submittedDate || null,
           decision_date: decisionDate || null,
@@ -264,19 +270,53 @@ export function ChangeOrderDetail({
             </p>
           ) : null}
 
+          {/* Progress on the change's own work — the only thing that earns it. */}
+          {status === "approved" ? (
+            <div className="mt-3 border-t border-line pt-2.5">
+              <div className="mb-1 flex items-center justify-between">
+                <span className="text-2xs text-ink-mute">Work performed</span>
+                <span className="font-mono text-2xs text-ink tabular">
+                  {formatPercent(progress, Number.isInteger(progress) ? 0 : 1)}
+                </span>
+              </div>
+              <input
+                type="range"
+                min={0}
+                max={100}
+                step={5}
+                value={progress}
+                onChange={(e) => setProgress(Number(e.target.value))}
+                className="h-1 w-full cursor-pointer appearance-none rounded-full bg-line accent-[var(--color-accent)]"
+              />
+              <p className="mt-1.5 text-[10px] leading-relaxed text-ink-faint">
+                Approved scope enters the budget at once and is earned only as it is performed.
+                At {formatPercent(progress, 0)} this order carries{" "}
+                <span className="text-ink-mute">
+                  {money(numericValue * (progress / 100), { compact: true, sign: true })}
+                </span>{" "}
+                of earned value.
+              </p>
+            </div>
+          ) : null}
+
           {/* What pressing the button is about to do, in the units it does it in. */}
           {willMoveBudget && account ? (
             <p className="mt-3 rounded-sm border border-warn/30 bg-warn-wash px-2 py-1.5 text-[10px] leading-relaxed text-warn">
               {account.code} moves from {money(account.current_budget, { compact: true })} to{" "}
               {money(account.current_budget + numericValue, { compact: true })}, and the project
-              budget with it. CPI and the forecast follow in the same write.
+              budget with it. The forecast at completion follows in the same write; earned value
+              does not, until the work is performed.
             </p>
           ) : null}
           {willReleaseBudget ? (
             <p className="mt-3 rounded-sm border border-line bg-raised px-2 py-1.5 text-[10px] leading-relaxed text-ink-mute">
               This order is currently in the budget. Moving it off approved releases{" "}
               {money(order.cost_impact, { compact: true, sign: true })} back out of{" "}
-              {order.account_code ?? "its account"}.
+              {order.account_code ?? "its account"}
+              {order.percent_complete > 0
+                ? `, and the ${formatPercent(order.percent_complete, 0)} recorded against it stops earning`
+                : ""}
+              .
             </p>
           ) : null}
 

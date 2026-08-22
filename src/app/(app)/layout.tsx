@@ -3,6 +3,8 @@ import { redirect } from "next/navigation";
 import { DesktopShell } from "@/components/shell/DesktopShell";
 import { SESSION_COOKIE, authMode, resolveSessionToken } from "@/lib/auth";
 import { findUserById } from "@/lib/users";
+import { listProjects, projectMetrics } from "@/lib/queries";
+import { roleOnProject } from "@/lib/rbac";
 
 /**
  * Everything behind the session gate renders inside the desktop shell.
@@ -21,9 +23,22 @@ export default async function AppLayout({ children }: { children: React.ReactNod
 
   const row = resolved.principal.development ? undefined : findUserById(resolved.principal.id);
 
+  // The portfolio travels with the first HTML. Fetching it from the browser
+  // instead put a blocking round trip in front of every page load: nothing
+  // could ask for its own data until the active project was known. The same
+  // filter as /api/projects, because it is the same question.
+  const projects = listProjects()
+    .filter((p) => roleOnProject(resolved.principal, p.id) !== null)
+    .map((p) => ({
+      ...p,
+      metrics: projectMetrics(p),
+      role: roleOnProject(resolved.principal, p.id),
+    }));
+
   return (
     <DesktopShell
       principal={resolved.principal}
+      projects={projects}
       authEnforced={mode.kind === "enforced"}
       mustChangePassword={row?.must_change_password === 1}
     >

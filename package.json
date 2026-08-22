@@ -10,7 +10,7 @@
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
     "db:seed": "node scripts/seed.mjs",
-    "db:reset": "rm -f data/starkvisionz.db && npm run db:seed",
+    "db:reset": "rm -f data/starkvisionz.db data/starkvisionz.db-wal data/starkvisionz.db-shm && npm run db:seed",
     "user": "node scripts/user.mjs",
     "smoke": "node scripts/smoke.mjs"
   },

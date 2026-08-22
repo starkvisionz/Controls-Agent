@@ -226,31 +226,50 @@ export function documentSummary(projectId: string, dataDate: string): DocumentSu
  * Rolls the control accounts up into the standard EVM metric set. EAC uses the
  * CPI-based formula (BAC / CPI), which assumes past cost performance continues —
  * the convention most EPC owners' reps expect on a lump-sum job.
+ *
+ * Cost and schedule are measured on different scopes, on purpose:
+ *
+ * - **Cost** (CPI, CV, EAC, VAC, TCPI) uses the totals. Every dollar spent is
+ *   in actual cost, including dollars spent on approved change scope, so every
+ *   dollar earned has to be there to match it.
+ * - **Schedule** (SPI, SV) uses the baseline pair. Approved change scope has no
+ *   schedule to be measured against until its activities are baselined, and
+ *   including it would move the index on a commercial event: adding the same
+ *   amount to earned and planned value drags (EV+c)/(PV+c) toward 1.0, so a
+ *   project reading 0.94 would appear to recover simply by performing work
+ *   nobody had planned.
+ *
+ * The Changes view reports the change component separately, which is where the
+ * scope outside the baseline belongs.
  */
 export function projectMetrics(project: Project): ProjectMetrics {
   const totals = one<{
     pv: number;
     ev: number;
     ac: number;
+    basePv: number;
+    baseEv: number;
     budget: number;
     committed: number;
     eac: number;
   }>(
     `SELECT
-        COALESCE(SUM(planned_value), 0)          AS pv,
-        COALESCE(SUM(earned_value), 0)           AS ev,
-        COALESCE(SUM(actual_cost), 0)            AS ac,
-        COALESCE(SUM(current_budget), 0)         AS budget,
-        COALESCE(SUM(committed), 0)              AS committed,
-        COALESCE(SUM(forecast_at_completion), 0) AS eac
+        COALESCE(SUM(planned_value), 0)           AS pv,
+        COALESCE(SUM(earned_value), 0)            AS ev,
+        COALESCE(SUM(actual_cost), 0)             AS ac,
+        COALESCE(SUM(baseline_planned_value), 0)  AS basePv,
+        COALESCE(SUM(baseline_earned_value), 0)   AS baseEv,
+        COALESCE(SUM(current_budget), 0)          AS budget,
+        COALESCE(SUM(committed), 0)               AS committed,
+        COALESCE(SUM(forecast_at_completion), 0)  AS eac
       FROM cost_accounts WHERE project_id = ?`,
     [project.id]
-  ) ?? { pv: 0, ev: 0, ac: 0, budget: 0, committed: 0, eac: 0 };
+  ) ?? { pv: 0, ev: 0, ac: 0, basePv: 0, baseEv: 0, budget: 0, committed: 0, eac: 0 };
 
   const bac = totals.budget || project.budget_at_completion;
   const { pv, ev, ac, committed } = totals;
 
-  const spi = pv > 0 ? ev / pv : 1;
+  const spi = totals.basePv > 0 ? totals.baseEv / totals.basePv : 1;
   const cpi = ac > 0 ? ev / ac : 1;
   // Fall back to the CPI-derived EAC when accounts carry no explicit forecast.
   const eac = totals.eac > 0 ? totals.eac : cpi > 0 ? bac / cpi : bac;
@@ -268,7 +287,9 @@ export function projectMetrics(project: Project): ProjectMetrics {
     pv,
     ev,
     ac,
-    sv: ev - pv,
+    // Schedule variance is the schedule index's partner, so it is measured on
+    // the same scope: the baseline. Cost variance is measured on the totals.
+    sv: totals.baseEv - totals.basePv,
     cv: ev - ac,
     spi,
     cpi,

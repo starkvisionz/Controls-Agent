@@ -91,6 +91,7 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
     status: input.status,
     cost_account_id: input.cost_account_id ?? null,
     cost_impact: input.cost_impact ?? 0,
+    percent_complete: 0,
     raised_date: input.raised_date,
     submitted_date: input.submitted_date ?? null,
     decision_date: null,
