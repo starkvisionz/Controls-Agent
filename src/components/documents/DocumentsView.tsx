@@ -23,6 +23,7 @@ import {
 } from "@/components/ui/Controls";
 import { useProjects } from "@/components/shell/ProjectContext";
 import { useResource } from "@/lib/use-resource";
+import { ImportButton } from "@/components/import/ImportButton";
 import { daysBetween, shortDate } from "@/lib/format";
 import type { DocumentSummary, Project, ProjectDocument, WbsNode } from "@/lib/types";
 
@@ -76,8 +77,8 @@ const REVIEW_MEANING: Record<string, string> = {
 const STATUS_ORDER = ["draft", "ifr", "ifa", "ifc", "as-built", "superseded"];
 
 export function DocumentsView() {
-  const { activeProjectId } = useProjects();
-  const { data, loading, error } = useResource<DocPayload>(
+  const { activeProjectId, refresh } = useProjects();
+  const { data, loading, error, reload } = useResource<DocPayload>(
     activeProjectId ? `/api/projects/${activeProjectId}/documents` : null
   );
 
@@ -209,6 +210,17 @@ export function DocumentsView() {
           onChange={setQuery}
           placeholder="Find a document…"
           className="ml-auto w-48 min-w-40 grow sm:grow-0"
+        />
+        <ImportButton
+          register="documents"
+          label="Documents"
+          permission="document:write"
+          onImported={() => {
+            reload();
+            // An import can move the project figures, and the status bar
+            // reads those from the portfolio rather than from this view.
+            refresh();
+          }}
         />
       </Toolbar>
 

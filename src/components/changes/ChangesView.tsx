@@ -3,6 +3,7 @@
 import { useMemo, useState } from "react";
 import { GitPullRequestArrow, Plus, TrendingUp } from "lucide-react";
 import { useResource } from "@/lib/use-resource";
+import { ImportButton } from "@/components/import/ImportButton";
 import { useProjects } from "@/components/shell/ProjectContext";
 import { useSession } from "@/components/shell/SessionContext";
 import { Panel, PanelHeader } from "@/components/ui/Panel";
@@ -142,6 +143,12 @@ export function ChangesView() {
               Raise a trend
             </button>
           ) : null}
+          <ImportButton
+            register="change-orders"
+            label="Change orders"
+            permission="cost:write"
+            onImported={reloadAll}
+          />
         </Toolbar>
 
         <div className="min-h-0 flex-1 overflow-y-auto p-2">

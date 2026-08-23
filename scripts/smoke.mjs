@@ -13,6 +13,8 @@
  *     scoped account cannot see or touch a project it was not granted
  *   - revocation: changing an account ends the sessions it already had
  *   - validation: out-of-range and unknown fields refused
+ *   - import: a preview writes nothing, a commit applies exactly what the
+ *     preview approved, and it is recorded like any other edit
  *   - rate limiting: not defeatable with a forged X-Forwarded-For
  *   - streaming: the agent endpoint still streams SSE
  *
@@ -765,6 +767,189 @@ check(
   "a rejected write records nothing",
   (await auditFor("task", target.id)).length === beforeRefused,
   `${beforeRefused} events before and after`
+);
+
+// ---------------------------------------------------------------------------
+// Import
+//
+// The promise the preview makes is that nothing happens until it is approved,
+// and that what is applied is what was shown. These check both ends of it: a
+// preview that writes would make the confirmation theatre, and a commit that
+// applied rows the preview called rejected would make it a lie.
+// ---------------------------------------------------------------------------
+console.log("\nimport");
+
+const upload = (path, csv, headers, name = "progress.csv") => {
+  const body = new FormData();
+  body.append("file", new Blob([csv], { type: "text/csv" }), name);
+  // Not `authed` — that carries a JSON content type, and the boundary has to
+  // come from the FormData.
+  return get(path, { method: "POST", headers: { cookie: headers.cookie }, body });
+};
+
+const importUrl = (register, mode) =>
+  `/api/projects/prj-gc4410/import?register=${register}&mode=${mode}`;
+
+const taskById = async (id, headers = authed) =>
+  (await (await get(`/api/tasks/${id}`, { headers })).json()).task;
+
+const live = await (await get("/api/projects/prj-gc4410/schedule", { headers: authed })).json();
+const [a, b, c] = live.tasks.filter((t) => !t.is_milestone && t.id !== target.id).slice(0, 3);
+check("found activities to import against", Boolean(a && b && c), [a?.code, b?.code, c?.code].join(", "));
+
+// Two rows that should apply, one repeated (an author who lost track of it),
+// one from the other project, and one out of range.
+const marker = `imported at line ${Math.round(a.percent_complete)}`;
+const aPercent = a.percent_complete > 50 ? 12 : 88;
+const bPercent = b.percent_complete > 50 ? 13 : 87;
+
+// A code this project has never held. Activity codes are unique within a
+// project, not across the portfolio, so the other project's code is used only
+// when GC-4410 does not also carry it.
+const gcCodes = new Set(live.tasks.map((t) => t.code));
+const elsewhere = nvSchedule.tasks.find((t) => !gcCodes.has(t.code));
+check("found a code this project does not hold", Boolean(elsewhere), elsewhere?.code);
+
+const sheet = [
+  "Activity ID,Status,Percent complete,Notes",
+  `${a.code},in-progress,${aPercent}%,"${marker}, by the smoke test"`,
+  `${b.code},in-progress,${bPercent},`,
+  `${b.code},in-progress,${bPercent - 1},`,
+  `${elsewhere.code},in-progress,50,`,
+  `${c.code},in-progress,900,`,
+].join("\n");
+
+const previewRes = await upload(importUrl("tasks", "preview"), sheet, authed);
+const previewed = await previewRes.json().catch(() => ({}));
+check("a spreadsheet previews", previewRes.status === 200, `status ${previewRes.status}`);
+check(
+  "it sorts the rows by what would happen",
+  previewed.plan?.counts.update === 2 &&
+    previewed.plan?.counts.invalid === 2 &&
+    previewed.plan?.counts["not-found"] === 1,
+  JSON.stringify(previewed.plan?.counts ?? {})
+);
+check(
+  "a row for another project is not found rather than created",
+  previewed.plan?.rows.find((r) => r.label === elsewhere.code)?.outcome === "not-found"
+);
+check(
+  "the repeated row is the second one, not the first",
+  previewed.plan?.rows.filter((r) => r.label === b.code).map((r) => r.outcome).join(",") ===
+    "update,invalid"
+);
+check(
+  "an out-of-range value is rejected by the same schema a typed edit uses",
+  previewed.plan?.rows.find((r) => r.label === c.code)?.errors[0]?.field === "percent_complete",
+  JSON.stringify(previewed.plan?.rows.find((r) => r.label === c.code)?.errors ?? [])
+);
+check(
+  "a percentage written with its sign is read as a number",
+  previewed.plan?.rows
+    .find((r) => r.label === a.code)
+    ?.changes.some((ch) => ch.field === "percent_complete" && ch.to === aPercent),
+  JSON.stringify(previewed.plan?.rows.find((r) => r.label === a.code)?.changes ?? [])
+);
+
+// The whole point of the two passes.
+check(
+  "the preview wrote nothing",
+  (await taskById(a.id)).percent_complete === a.percent_complete,
+  `${a.percent_complete} still`
+);
+
+const beforeImport = await metrics();
+const commitRes = await upload(importUrl("tasks", "commit"), sheet, authed);
+const committed = await commitRes.json().catch(() => ({}));
+check("the same file commits", commitRes.status === 200, `status ${commitRes.status}`);
+check(
+  "only the rows the preview approved were applied",
+  committed.result?.applied === 2 && committed.result?.skipped === 3,
+  JSON.stringify(committed.result ?? {})
+);
+
+const importedA = await taskById(a.id);
+check(
+  "the value in the file is the value in the register",
+  importedA.percent_complete === aPercent && importedA.notes.startsWith(marker),
+  `${importedA.percent_complete}% — ${importedA.notes}`
+);
+check(
+  "a quoted comma stayed inside its field",
+  importedA.notes === `${marker}, by the smoke test`,
+  importedA.notes
+);
+check(
+  "the row that was not found was not created",
+  (await taskById(elsewhere.id)).percent_complete === elsewhere.percent_complete &&
+    live.tasks.filter((t) => t.code === elsewhere.code).length === 0,
+  `${elsewhere.code} untouched on its own project, and still absent from this one`
+);
+
+// An import is a schedule edit, so the money has to have moved with it.
+const afterImport = await metrics();
+check(
+  "the roll-up ran once for the file",
+  afterImport.ev !== beforeImport.ev,
+  `${Math.round(beforeImport.ev).toLocaleString()} -> ${Math.round(afterImport.ev).toLocaleString()}`
+);
+
+// Each imported record gets its own entry, named after the file, so an activity
+// that moved because of a spreadsheet reads the same as one that was typed.
+const importedLog = await auditFor("task", a.id);
+const fromFile = importedLog.find((e) => e.summary === "imported from progress.csv");
+check("the import is in the activity's history", Boolean(fromFile), importedLog.map((e) => e.summary).join(" | "));
+check(
+  "it says who imported it and what moved",
+  fromFile?.actor_email === ACCOUNTS.admin &&
+    fromFile?.changes?.some((ch) => ch.field === "percent_complete" && ch.to === aPercent),
+  JSON.stringify(fromFile?.changes ?? [])
+);
+
+// A file nothing can be matched by is refused with an explanation rather than
+// imported as one enormous column.
+const unmappable = await upload(importUrl("tasks", "preview"), "Widget,Colour\nsprocket,red", authed);
+const unmappableBody = await unmappable.json().catch(() => ({}));
+check(
+  "a file with no identifying column is refused",
+  unmappable.status === 422 && /Activity ID/.test(unmappableBody.error ?? ""),
+  `${unmappable.status} ${unmappableBody.error ?? ""}`
+);
+
+check(
+  "an unknown register is refused",
+  (await upload(importUrl("invoices", "preview"), sheet, authed)).status === 400
+);
+
+// Importing into a register is editing that register, whatever route it takes.
+const plannerRisks = await upload(
+  "/api/projects/prj-gc4410/import?register=risks&mode=preview",
+  "Risk ID,Probability\nR-01,3",
+  asPlannerNow,
+  "risks.csv"
+);
+check(
+  "a planner may NOT import into the risk register",
+  plannerRisks.status === 403,
+  `status ${plannerRisks.status}`
+);
+check(
+  "a planner may import into the schedule",
+  (await upload(importUrl("tasks", "preview"), sheet, asPlannerNow)).status === 200
+);
+check(
+  "a viewer may not import at all",
+  (await upload(importUrl("tasks", "preview"), sheet, asViewer)).status === 403
+);
+check(
+  "an account without the project cannot import into it",
+  (
+    await upload(
+      "/api/projects/prj-nv2208/import?register=tasks&mode=preview",
+      sheet,
+      asViewer
+    )
+  ).status === 404
 );
 
 // ---------------------------------------------------------------------------

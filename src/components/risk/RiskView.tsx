@@ -17,6 +17,7 @@ import { RiskMatrix } from "./RiskMatrix";
 import { RiskDetail } from "./RiskDetail";
 import { useProjects } from "@/components/shell/ProjectContext";
 import { useResource } from "@/lib/use-resource";
+import { ImportButton } from "@/components/import/ImportButton";
 import { money, severityBand, shortDate } from "@/lib/format";
 import type { Project, Risk, RiskSummary, WbsNode } from "@/lib/types";
 
@@ -40,8 +41,8 @@ const STATUS_TONE: Record<string, Tone> = {
 };
 
 export function RiskView() {
-  const { activeProjectId } = useProjects();
-  const { data, loading, error } = useResource<RiskPayload>(
+  const { activeProjectId, refresh } = useProjects();
+  const { data, loading, error, reload } = useResource<RiskPayload>(
     activeProjectId ? `/api/projects/${activeProjectId}/risks` : null
   );
 
@@ -139,6 +140,17 @@ export function RiskView() {
           options={categories.map((c) => ({ value: c, label: c === "all" ? "All" : c }))}
         />
         <SearchInput value={query} onChange={setQuery} placeholder="Find a risk…" className="ml-auto w-48 min-w-40 grow sm:grow-0" />
+        <ImportButton
+          register="risks"
+          label="Risks"
+          permission="risk:write"
+          onImported={() => {
+            reload();
+            // An import can move the project figures, and the status bar
+            // reads those from the portfolio rather than from this view.
+            refresh();
+          }}
+        />
       </Toolbar>
 
       <div className="flex min-h-0 flex-1">
