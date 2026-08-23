@@ -6,6 +6,8 @@ import {
   sessionCookieOptions,
   SESSION_COOKIE,
 } from "@/lib/auth";
+import { getDb } from "@/lib/db";
+import { recordAudit } from "@/lib/audit";
 import { checkRate, tooManyRequests } from "@/lib/rate-limit";
 import { permissionsOf } from "@/lib/rbac";
 import { findUserByEmail, recordLogin, toPrincipal, verifyPassword } from "@/lib/users";
@@ -60,9 +62,25 @@ export async function POST(req: Request) {
   if (!verifyPassword(parsed.data.password, user?.password_hash)) return refuse();
   if (!user || user.is_active !== 1) return refuse();
 
-  recordLogin(user.id);
-
   const principal = toPrincipal(user);
+
+  // Successful sign-ins only. Recording the failures here would put a log entry
+  // behind every guess, which is a way to fill a table from outside.
+  const db = getDb();
+  db.transaction(() => {
+    recordLogin(user.id, db);
+    recordAudit(
+      {
+        principal,
+        entityType: "account",
+        entityId: user.id,
+        entityLabel: user.email,
+        action: "sign-in",
+        summary: `signed in as ${principal.role}`,
+      },
+      db
+    );
+  })();
   const res = NextResponse.json({
     ok: true,
     authenticated: true,

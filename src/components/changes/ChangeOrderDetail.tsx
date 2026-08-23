@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { EntityHistory } from "@/components/activity/EntityHistory";
 import { X } from "lucide-react";
 import { Badge } from "@/components/ui/Badge";
 import { ReadOnlyNote } from "@/components/ui/Controls";
@@ -342,6 +343,7 @@ export function ChangeOrderDetail({
         <p className="mt-3 border-t border-line pt-2.5 text-[10px] leading-relaxed text-ink-faint">
           Project budget {money(metrics.bac, { compact: true })} · CPI {metrics.cpi.toFixed(3)}
         </p>
+        <EntityHistory entityType="change_order" entityId={order.id} />
       </div>
     </aside>
   );

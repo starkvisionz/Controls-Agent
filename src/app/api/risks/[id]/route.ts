@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { requirePermission, requireProjectRead } from "@/lib/guard";
+import { diffFields, recordAudit } from "@/lib/audit";
 import { checkRate, tooManyRequests } from "@/lib/rate-limit";
 import { getDb, one } from "@/lib/db";
 import { riskPatchSchema, toFieldErrors } from "@/lib/validation";
@@ -22,7 +23,8 @@ export async function GET(req: Request, ctx: { params: Promise<{ id: string }> }
 export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }> }) {
   const { id } = await ctx.params;
 
-  const existing = one<Risk>(`SELECT id, project_id FROM risks WHERE id = ?`, [id]);
+  // The whole row, not just the id: the audit diff is computed against it.
+  const existing = one<Risk>(`SELECT * FROM risks WHERE id = ?`, [id]);
   if (!existing) return NextResponse.json({ error: "Risk not found" }, { status: 404 });
 
   const guard = requirePermission(req, "risk:write", existing.project_id);
@@ -48,6 +50,7 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }>
 
   const db = getDb();
   const entries = Object.entries(parsed.data);
+  const changes = diffFields(existing as unknown as Record<string, unknown>, parsed.data);
 
   const write = db.transaction(() => {
     db.prepare(
@@ -63,6 +66,20 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }>
                                     ELSE cost_impact * (probability / 5.0) END
         WHERE id = ?`
     ).run(id);
+
+    recordAudit(
+      {
+        principal: guard.principal,
+        projectId: existing.project_id,
+        entityType: "risk",
+        entityId: id,
+        entityLabel: existing.code,
+        action: "update",
+        summary: existing.title,
+        changes,
+      },
+      db
+    );
   });
 
   write();

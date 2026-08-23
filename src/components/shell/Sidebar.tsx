@@ -9,6 +9,7 @@ import {
   PanelLeftClose,
   PanelLeftOpen,
   GitPullRequestArrow,
+  History,
   ShieldAlert,
   Users,
   Wallet,
@@ -38,6 +39,7 @@ const NAV: NavItem[] = [
     hint: "Change orders, trends and the budget they move",
   },
   { href: "/documents", label: "Documents", icon: FileText, hint: "Deliverable register and review status" },
+  { href: "/activity", label: "Activity", icon: History, hint: "Who changed what, and when" },
   {
     href: "/users",
     label: "Accounts",

@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
 import { requirePermission } from "@/lib/guard";
+import { recordAudit } from "@/lib/audit";
 import { checkRate, tooManyRequests } from "@/lib/rate-limit";
+import { getDb } from "@/lib/db";
 import { createUser, DuplicateEmailError, listUsers } from "@/lib/users";
 import { createUserSchema, toFieldErrors } from "@/lib/validation";
 
@@ -38,7 +40,23 @@ export async function POST(req: Request) {
   try {
     // Somebody else chose this password, so it is a starting credential rather
     // than a secret: the account must replace it before it can do anything.
-    const user = createUser({ ...parsed.data, mustChangePassword: true });
+    const db = getDb();
+    const user = db.transaction(() => {
+      const created = createUser({ ...parsed.data, mustChangePassword: true }, db);
+      recordAudit(
+        {
+          principal: guard.principal,
+          entityType: "account",
+          entityId: created.id,
+          entityLabel: created.email,
+          action: "create",
+          summary: `${created.name} — ${created.role}`,
+        },
+        db
+      );
+      return created;
+    })();
+
     return NextResponse.json({ user }, { status: 201 });
   } catch (err) {
     if (err instanceof DuplicateEmailError) {

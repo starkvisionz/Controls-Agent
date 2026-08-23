@@ -20,6 +20,7 @@ same tables the agent reads, so the dashboard and the agent never disagree.
 | **Risk** | 5×5 probability-impact matrix with click-through drilldown, exposure by category, and an editable risk inspector with mitigation tracking |
 | **Changes** | The change-order register — trends, submissions, approvals — with the budget movement each one causes, approval turnaround, and where the change is coming from |
 | **Documents** | Deliverable register with issue status, client review codes, overdue tracking, and approval progress by discipline |
+| **Activity** | Who changed what and when — the project's register history, and account changes for administrators |
 | **Agent** | A streaming chat panel that answers from the live database — cost variance, critical path, risk exposure, forecast basis, and recommendations |
 
 ![The Changes view — the register, and the budget it moves](docs/changes.png)
@@ -160,6 +161,7 @@ src/
     rollup-core.mjs       schedule -> cost roll-up, shared with the seeder
     change-orders-core.mjs  change register -> control-account budgets
     validation.ts         Zod schemas shared by the UI and the API
+    audit.ts              who changed what, written with the change itself
     rbac.ts               roles, permissions, and the one `can()` they answer
     auth.ts guard.ts      sessions, and the check every route runs
     users.ts              the account store, over accounts-core.mjs
@@ -275,6 +277,28 @@ deactivation take effect on the next request rather than in twelve hours. The
 edge middleware checks the signature and expiry, because that is all it can
 reach; the Node routes re-resolve the account against the database, which is
 where a since-revoked session is actually caught.
+
+**The audit row is written by the transaction that made the change.** An audit
+log that can disagree with the data is worse than none, because people believe
+it — so `recordAudit` takes the handle the caller is already writing through
+rather than opening its own. A write that rolls back takes its audit row with
+it, and a write that succeeds is always recorded.
+
+The log stores the diff rather than a snapshot: which fields moved, and what
+they moved from and to. A field submitted with the value it already held is not
+a change and is not recorded, or every save would look like an edit to
+everything. Password digests never reach it — that the credential changed is
+carried by the action instead.
+
+The actor's name and email are copied into the row rather than joined at read
+time. An account can be renamed or have its role changed, and the log has to
+say who made the change under the identity they held when they made it.
+
+Reading is scoped the way the data is. A project's history is as sensitive as
+the project, so it needs the same read permission; a record's history is
+authorised against the project that record belongs to rather than against the
+caller's claim about it. Account changes are administrator-only — a planner
+should see who moved an activity, not who changed somebody's role.
 
 **The agent gets a briefing, not a database handle.** Every chat turn rebuilds a
 plain-text snapshot of the project from the current tables and hands that to the

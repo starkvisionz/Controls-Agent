@@ -668,6 +668,106 @@ check(
 );
 
 // ---------------------------------------------------------------------------
+// The audit trail
+//
+// An audit log that can disagree with the data is worse than none, because
+// people believe it. These check that every write is recorded, that the record
+// says what actually moved, and that reading it is scoped the same way the data
+// is — a project's history is as sensitive as the project.
+// ---------------------------------------------------------------------------
+console.log("\naudit trail");
+
+const auditFor = async (entity, id, headers = authed) =>
+  (await (await get(`/api/audit?entity=${entity}&id=${encodeURIComponent(id)}`, { headers })).json())
+    .events ?? [];
+
+// The schedule edit near the top of this file went through as the admin.
+const taskLog = await auditFor("task", target.id);
+check("the schedule edit was recorded", taskLog.length > 0, `${taskLog.length} events`);
+// Several roles patch this activity above, so the admin's edit is somewhere in
+// the list rather than necessarily at the top of it.
+check(
+  "each entry names who made it",
+  taskLog.every((e) => e.actor_email) && taskLog.some((e) => e.actor_email === ACCOUNTS.admin),
+  [...new Set(taskLog.map((e) => e.actor_email))].join(", ")
+);
+check(
+  "it records the field that moved, with both values",
+  taskLog.some((e) =>
+    e.changes?.some((c) => c.field === "percent_complete" && Number(c.to) === 100 && c.from !== undefined)
+  ),
+  JSON.stringify(taskLog.flatMap((e) => e.changes ?? []).find((c) => c.field === "percent_complete") ?? {})
+);
+
+// An approval is the event somebody scanning the log is looking for, so it gets
+// its own verb rather than hiding inside a generic update.
+const orderLog = await auditFor("change_order", open.id);
+check(
+  "approving a change order is logged as an approval",
+  orderLog.some((e) => e.action === "approve"),
+  orderLog.map((e) => e.action).join(", ")
+);
+
+// Reading history is scoped like the data. The demo viewer holds GC-4410 only.
+const scopedHistory = await get(`/api/audit?entity=task&id=${nvTask.id}`, { headers: asViewer });
+check(
+  "history of an out-of-scope record is refused",
+  scopedHistory.status === 404,
+  `status ${scopedHistory.status}`
+);
+check(
+  "a project feed is refused to an account without the project",
+  (await get("/api/audit?project=prj-nv2208", { headers: asViewer })).status === 404
+);
+check(
+  "a project feed is allowed to an account with it",
+  (await get("/api/audit?project=prj-gc4410", { headers: asViewer })).status === 200
+);
+
+// Account changes are administrator-only: a planner should see who moved an
+// activity, not who changed somebody's role.
+check("admin may read the account log", (await get("/api/audit?scope=accounts", { headers: authed })).status === 200);
+// A fresh planner session: the revocation section above ends that account's
+// sessions twice — once demoting it, once putting the role back — so every
+// cookie taken before now answers 401 rather than the 403 this is testing for.
+const asPlannerNow = { ...json, cookie: await signIn(ACCOUNTS.planner) };
+for (const [label, headers] of [
+  ["controls lead", asLead],
+  ["planner", asPlannerNow],
+  ["viewer", asViewer],
+]) {
+  const res = await get("/api/audit?scope=accounts", { headers });
+  check(`${label} may NOT read the account log`, res.status === 403, `status ${res.status}`);
+}
+
+// The role change further up was made by the admin against the planner.
+const accountLog = (await (await get("/api/audit?scope=accounts", { headers: authed })).json()).events;
+check(
+  "the role change was recorded",
+  accountLog.some((e) => e.entity_type === "account" && e.changes?.some((c) => c.field === "role")),
+  `${accountLog.length} account events`
+);
+check(
+  "no password digest reached the log",
+  !JSON.stringify(accountLog).includes("scrypt$"),
+  "checked every account event"
+);
+
+// A refused write must leave nothing behind — the audit row and the change are
+// one transaction or the log is fiction.
+const beforeRefused = (await auditFor("task", target.id)).length;
+await get(`/api/tasks/${target.id}`, {
+  method: "PATCH",
+  headers: authed,
+  body: JSON.stringify({ percent_complete: 631 }),
+});
+check(
+  "a rejected write records nothing",
+  (await auditFor("task", target.id)).length === beforeRefused,
+  `${beforeRefused} events before and after`
+);
+
+// ---------------------------------------------------------------------------
 // Rate limiting
 //
 // Last, because proving the login limit works means exhausting it, and nothing

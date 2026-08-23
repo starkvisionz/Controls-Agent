@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { requirePermission, requireProjectRead } from "@/lib/guard";
+import { diffFields, recordAudit } from "@/lib/audit";
 import { checkRate, tooManyRequests } from "@/lib/rate-limit";
 import { getDb, one } from "@/lib/db";
 import { documentPatchSchema, toFieldErrors } from "@/lib/validation";
@@ -61,9 +62,30 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }>
   }
 
   const entries = Object.entries(patch);
-  getDb()
-    .prepare(`UPDATE documents SET ${entries.map(([k]) => `${k} = ?`).join(", ")} WHERE id = ?`)
-    .run(...entries.map(([, v]) => v as never), id);
+  const changes = diffFields(existing as unknown as Record<string, unknown>, patch);
+
+  // A transaction for two statements that would otherwise be one: the audit row
+  // has to land with the change or not at all.
+  const db = getDb();
+  db.transaction(() => {
+    db.prepare(
+      `UPDATE documents SET ${entries.map(([k]) => `${k} = ?`).join(", ")} WHERE id = ?`
+    ).run(...entries.map(([, v]) => v as never), id);
+
+    recordAudit(
+      {
+        principal: guard.principal,
+        projectId: existing.project_id,
+        entityType: "document",
+        entityId: id,
+        entityLabel: `${existing.doc_number} rev ${existing.revision}`,
+        action: "update",
+        summary: existing.title,
+        changes,
+      },
+      db
+    );
+  })();
 
   return NextResponse.json({
     document: one<ProjectDocument>(`SELECT * FROM documents WHERE id = ?`, [id]),
