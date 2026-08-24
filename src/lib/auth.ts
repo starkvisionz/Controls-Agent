@@ -211,7 +211,15 @@ export const sessionCookieOptions = {
   path: "/",
   maxAge: SESSION_TTL_SECONDS,
   // Set on HTTPS deployments; left off locally so login works over plain http.
-  secure: process.env.NODE_ENV === "production",
+  //
+  // A production instance served over plain HTTP is a real, if narrow, case —
+  // reached only through a VPN or an SSH tunnel — and there the Secure flag is
+  // not a safeguard but a lockout: the browser accepts the cookie and then
+  // never sends it back, so a correct password bounces straight to the login
+  // page again. The opt-out has to be set deliberately, and says what it costs.
+  secure:
+    process.env.NODE_ENV === "production" &&
+    process.env.STARKVISIONZ_INSECURE_COOKIES !== "1",
 };
 
 /** Used by `npm run auth:secret` to print a signing key. */

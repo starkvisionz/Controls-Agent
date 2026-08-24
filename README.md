@@ -68,6 +68,25 @@ npm run dev         # http://localhost:3000
 
 The database is a local SQLite file; there is no external service to configure.
 
+### On a server
+
+One command on a fresh Debian or Ubuntu VPS, and about ten minutes:
+
+```bash
+sudo git clone https://github.com/starkvisionz/Controls-Agent.git /opt/starkvisionz
+sudo /opt/starkvisionz/deploy/install.sh --domain controls.example.com --email you@example.com
+```
+
+Node and nginx, a system account that can write nothing but its database, the
+build, a generated session secret, a systemd unit, a Let's Encrypt certificate
+and a nightly backup. Idempotent — run it again after `git pull` and it rebuilds
+and restarts without touching the database, the secret or the certificate.
+
+It deliberately leaves the instance with **no way in**: no demo data, no
+accounts. Create the first administrator by hand, on the host, when it finishes.
+[docs/DEPLOY.md](docs/DEPLOY.md) has the runbook — updates, backups and
+restores, and what each failure in the log actually means.
+
 ### Before you expose it
 
 Starkvisionz holds a project's cost, schedule and commercial position, so it runs
@@ -428,7 +447,9 @@ so it exercises the local analyst and never depends on a provider.
 |---|---|
 | `npm run dev` | Development server on :3000 |
 | `npm run build` / `npm start` | Production build and serve |
-| `npm run db:seed` | Build and populate the database |
+| `npm run serve` | Serve on `$HOST`/`$PORT` — loopback by default, what the systemd unit runs |
+| `npm run db:init` | Create an empty database — schema only, for a real deployment |
+| `npm run db:seed` | Build and populate the database with the demo portfolio |
 | `npm run db:reset` | Delete and rebuild it |
 | `npm run typecheck` | `tsc --noEmit` |
 | `npm run lint` | ESLint over the whole tree |

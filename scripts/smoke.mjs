@@ -112,6 +112,27 @@ const cookie = await signIn(ACCOUNTS.admin);
 check("correct password accepted", cookie !== null);
 check("session cookie issued", Boolean(cookie?.startsWith("starkvisionz_session=")));
 
+// The deployed instance is HTTPS, and a session cookie that a script can read
+// or that travels in the clear is the whole authentication story undone. The
+// flags are the guard, so the flags are asserted.
+const setCookie = wrong.headers.get("set-cookie") ?? "";
+const loginHeaders =
+  (await get("/api/auth/login", {
+    method: "POST",
+    headers: json,
+    body: JSON.stringify({ email: ACCOUNTS.viewer, password: PASSWORD }),
+  })).headers.get("set-cookie") ?? setCookie;
+check(
+  "the session cookie is HttpOnly and Secure",
+  /HttpOnly/i.test(loginHeaders) && /Secure/i.test(loginHeaders),
+  loginHeaders.split(";").slice(1).join(";").trim() || "no attributes"
+);
+check(
+  "it is SameSite=Lax, so a cross-site POST carries no session",
+  /SameSite=lax/i.test(loginHeaders),
+  loginHeaders
+);
+
 if (!cookie) {
   // Everything below needs a session. Say why rather than failing forty
   // assertions with the same cause — the usual reason is a re-run against a
