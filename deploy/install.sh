@@ -255,6 +255,58 @@ if [ "$WANT_TLS" -eq 0 ]; then
 elif [ -d "/etc/letsencrypt/live/$DOMAIN" ]; then
   note "certificate for $DOMAIN already exists — renewal is already scheduled"
 else
+  # Certbot proves control over the name by being reached at it, so check what
+  # the name resolves to before spending a rate-limited attempt on it.
+  #
+  # node, not getent: glibc suppresses AAAA when the host has no IPv6 route, so
+  # on an IPv4-only VPS getent reports no AAAA even when the zone has one — and
+  # that is exactly the case this check exists to catch. node issues a real
+  # query. The build has already run, so node is here.
+  dns_answer="$(sudo -u "$APP_USER" env -C "$APP_DIR" node -e '
+const dns = require("dns").promises;
+const name = process.argv[1];
+const go = async (f) => { try { return await f(); } catch { return []; } };
+(async () => {
+  const [a, aaaa] = await Promise.all([go(() => dns.resolve4(name)), go(() => dns.resolve6(name))]);
+  console.log(a.join(" "));
+  console.log(aaaa.join(" "));
+})();
+' "$DOMAIN" 2>/dev/null)"
+  a_records="$(printf '%s\n' "$dns_answer" | sed -n 1p)"
+  aaaa_records="$(printf '%s\n' "$dns_answer" | sed -n 2p)"
+  here="$(ip -o addr show scope global 2>/dev/null | awk '{print $4}' | cut -d/ -f1 | sort -u)"
+
+  if [ -z "$a_records$aaaa_records" ]; then
+    note "WARNING: $DOMAIN does not resolve. certbot cannot succeed — fix DNS first."
+  else
+    # Let's Encrypt resolves IPv6 in preference to IPv4. An AAAA left pointing
+    # at a previous host fails validation while the A record looks perfect,
+    # which is the hardest version of this to read from the error alone.
+    stray6=""
+    for addr in $aaaa_records; do
+      printf '%s\n' "$here" | grep -qxF "$addr" || stray6="$stray6 $addr"
+    done
+    if [ -n "$stray6" ]; then
+      note "WARNING: $DOMAIN has AAAA records that are not addresses on this"
+      note "  machine:$stray6"
+      note "  IPv6 is tried first, so these fail validation even with a correct"
+      note "  A record. Delete them, or point them here."
+    fi
+    matched=0
+    for addr in $a_records $aaaa_records; do
+      printf '%s\n' "$here" | grep -qxF "$addr" && matched=1
+    done
+    if [ "$matched" -eq 0 ]; then
+      note "WARNING: $DOMAIN resolves to$(printf ' %s' $a_records $aaaa_records)"
+      note "  and none of those is an address on this machine. If your DNS panel"
+      note "  refused the A record, the name most likely still carries an ALIAS or"
+      note "  CNAME from a site builder or CDN — that record IS the answer, so the"
+      note "  zone will not hold an A record beside it. Delete it and re-add the A,"
+      note "  and turn the CDN off for this name: it also answers on port 80, which"
+      note "  is where certbot needs to reach this machine."
+    fi
+  fi
+
   apt-get install -y -qq certbot python3-certbot-nginx >/dev/null
   certbot_args=(--nginx -d "$DOMAIN" --redirect --non-interactive --agree-tos)
   if [ -n "$EMAIL" ]; then
@@ -266,8 +318,8 @@ else
   if certbot "${certbot_args[@]}"; then
     note "certificate issued; renewal runs from certbot's own timer"
   else
-    note "certbot failed. The app is up on plain HTTP — the usual cause is the"
-    note "A record for $DOMAIN not pointing here yet. Fix DNS and run:"
+    note "certbot failed. The app is up on plain HTTP — the usual cause is DNS"
+    note "for $DOMAIN not pointing here yet (see any warning above). Fix it, then:"
     note "  sudo certbot --nginx -d $DOMAIN --redirect"
   fi
 fi

@@ -11,6 +11,29 @@ hand you.
 - **A domain** whose A record already points at the VPS. Let's Encrypt proves
   control by resolving the name, so DNS has to be right *first* — that is the
   single most common reason the install ends without a certificate.
+
+  Two things bite on hosts that manage DNS for you, Hostinger among them:
+
+  **An `ALIAS` or `CNAME` already on that name blocks the A record.** An `ALIAS`
+  *is* the address answer, synthesised when the name is queried, so the zone
+  cannot also hold an A record for it — the panel refuses the new record rather
+  than let two authorities disagree. These get created for you, by a site
+  builder or a CDN, on names you never configured. Delete it; if a CDN put it
+  there, turn the CDN off for that hostname or it comes back.
+
+  **Delete any `AAAA` on the name too, unless the VPS actually has that
+  address.** Let's Encrypt resolves IPv6 in preference to IPv4, so an `AAAA`
+  left pointing at the old host fails validation while `dig +short <domain>`
+  shows a perfectly correct A record and tells you nothing.
+
+  Check what is published, not what the panel shows, before you install:
+
+  ```bash
+  dig +short controls.example.com A      # the VPS address, and nothing else
+  dig +short controls.example.com AAAA   # empty, or the VPS's own IPv6
+  ```
+
+  Old records have their TTL left to run, so give it a few minutes.
 - **~1 GB of free RAM for the build.** `next build` is the heaviest thing that
   will ever run here. On a 1 GB instance, add swap before you start:
 
@@ -142,7 +165,7 @@ sudo journalctl -u starkvisionz -n 50 --no-pager
 | `EADDRINUSE` | Something else holds the port. `sudo ss -lntp \| grep <port>`. |
 | Killed during `next build` | Out of memory. Add swap (above) and re-run. |
 | 502 from nginx | The app is down; the unit's status says why. |
-| certbot failed | Almost always DNS. Check `dig +short <domain>` matches the VPS, then `sudo certbot --nginx -d <domain> --redirect`. |
+| certbot failed | Almost always DNS: an `ALIAS`/`CNAME` still on the name, a stale `AAAA` resolving ahead of the A record, or a TTL that has not run out. Check both queries above, then `sudo certbot --nginx -d <domain> --redirect`. |
 
 ## The agent panel
 
