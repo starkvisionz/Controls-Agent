@@ -34,6 +34,19 @@ hand you.
   ```
 
   Old records have their TTL left to run, so give it a few minutes.
+- **Ports 80 and 443 free.** nginx needs both. A VPS image with a preinstalled
+  Docker stack — Traefik, Caddy, or a panel like Coolify or Dokploy — already
+  holds them, and the install refuses to start rather than fail partway. Stop
+  that service, then make sure it stays stopped:
+
+  ```bash
+  sudo ss -lntp | grep -E ':80 |:443 '     # expect no output
+  ```
+
+  A container with `restart: always` comes back on reboot and takes the port
+  before nginx does, so the site works until the first reboot and then does
+  not. `docker update --restart=no <name>` if you are keeping Docker around.
+
 - **~1 GB of free RAM for the build.** `next build` is the heaviest thing that
   will ever run here. On a 1 GB instance, add swap before you start:
 
@@ -162,7 +175,7 @@ sudo journalctl -u starkvisionz -n 50 --no-pager
 |---|---|
 | `not configured for authenticated access` | `STARKVISIONZ_SESSION_SECRET` is empty or the env file is unreadable. The app refuses to serve rather than expose the registers. |
 | `SQLITE_CANTOPEN` | `/var/lib/starkvisionz` is not writable by `starkvisionz`, or `ReadWritePaths` in the unit no longer matches `STARKVISIONZ_DB_PATH`. |
-| `EADDRINUSE` | Something else holds the port. `sudo ss -lntp \| grep <port>`. |
+| `EADDRINUSE` | Something else holds the port. `sudo ss -lntp \| grep <port>`. On 80/443 it is usually a preinstalled Traefik or panel stack — see ports, above. |
 | Killed during `next build` | Out of memory. Add swap (above) and re-run. |
 | 502 from nginx | The app is down; the unit's status says why. |
 | certbot failed | Almost always DNS: an `ALIAS`/`CNAME` still on the name, a stale `AAAA` resolving ahead of the A record, or a TTL that has not run out. Check both queries above, then `sudo certbot --nginx -d <domain> --redirect`. |

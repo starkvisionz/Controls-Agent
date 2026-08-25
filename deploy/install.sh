@@ -78,6 +78,26 @@ if [ "$SOURCE_DIR" != "$APP_DIR" ]; then
   APP_DIR="$SOURCE_DIR"
 fi
 
+# nginx is going to want 80 and 443. Find out now, by name, rather than after
+# apt has installed it and dpkg fails to start it — that surfaces as a reload
+# error three sections later with nothing pointing at the cause. A VPS image
+# with a preinstalled Docker stack (Traefik, Caddy, a panel) is the usual
+# reason, and those come back on reboot unless their restart policy changes.
+holders="$(ss -lntpH 2>/dev/null | awk '$4 ~ /:(80|443)$/ {print}')"
+if [ -n "$holders" ]; then
+  if printf '%s\n' "$holders" | grep -qv 'nginx'; then
+    printf '\n' >&2
+    printf '  Something other than nginx is already listening on 80/443:\n\n' >&2
+    printf '%s\n' "$holders" | sed 's/^/    /' >&2
+    printf '\n  nginx cannot bind, so the install would fail partway. Stop that\n' >&2
+    printf '  service first, and make sure it does not come back on reboot —\n' >&2
+    printf '  a container with restart=always will take the port back and the\n' >&2
+    printf '  site will be fine until the first reboot and then silently not.\n\n' >&2
+    die "Free ports 80 and 443, then run this again."
+  fi
+  note "nginx already holds 80/443 — this is a re-run"
+fi
+
 # ---------------------------------------------------------------------------
 say "Packages"
 # ---------------------------------------------------------------------------
