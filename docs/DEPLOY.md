@@ -5,9 +5,6 @@ database on a persistent path outside the checkout, and a nightly backup. Tested
 against a fresh Debian/Ubuntu VPS of the kind Hostinger, Hetzner or DigitalOcean
 hand you.
 
-Deploying somewhere else? [RAILWAY.md](RAILWAY.md) covers Railway, where a
-container and a mounted volume run this unchanged.
-
 ## Before you start
 
 - **A VPS** running Debian 11+ or Ubuntu 22.04+, with root or sudo.
