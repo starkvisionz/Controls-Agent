@@ -74,12 +74,18 @@ the session secret or the certificate.
 once, at the end. That password has to be replaced at first sign-in, and the
 refusal is the server's, not the sign-in page's: an account still on a starting
 password can authenticate and read who it is, and is refused everything else
-until it picks its own. So the string that scrolled past your terminal stops
+until it picks its own — the API, and the project data a page would otherwise
+send with its first render. So the string that scrolled past your terminal stops
 being a usable credential the moment the account is used — and a copy of it,
 from your scrollback or a deploy log, does not become one.
 
 The same holds for every account created from the Accounts view, since those
 start on a password an administrator chose for somebody else.
+
+The installer passes that password to the account tool through a pipe rather
+than an argument, because a command line is readable from `/proc` by any local
+account for as long as the process runs. `npm run user -- add --password-stdin`
+is the same path if you are scripting account creation yourself.
 
 Leave `--admin-email` off and the instance installs with no account and no
 sign-up page, which is to say no way in. Then make the account yourself:

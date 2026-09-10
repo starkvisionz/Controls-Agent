@@ -447,6 +447,23 @@ check(
   (await get("/api/auth/me", { headers: pending })).status === 200
 );
 
+// Refusing the API is only half of it. The app layout renders on the server and
+// serialises the portfolio into the payload, so a page can hand over rows that
+// no component draws — the password prompt is on screen, and the project names
+// and contract values are in the response body behind it. Assert on the bytes,
+// not on what is visible.
+const pendingPage = await get("/", { headers: pending });
+const pendingHtml = await pendingPage.text();
+const leaked = ["Gulf Coast LNG", "Sabine Midstream", "Cameron Parish", "486000000"].filter((s) =>
+  pendingHtml.includes(s)
+);
+check("the page it is served renders", pendingPage.status === 200, `status ${pendingPage.status}`);
+check(
+  "and carries no project data in its payload",
+  leaked.length === 0,
+  leaked.length ? `leaked: ${leaked.join(", ")}` : `${pendingHtml.length} bytes, none of it the portfolio`
+);
+
 const changed = await get("/api/auth/password", {
   method: "POST",
   headers: pending,

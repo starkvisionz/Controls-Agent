@@ -69,11 +69,34 @@ function parseArgs(argv) {
 
 /**
  * Reads a password without echoing it and without leaving it in shell history.
- * `--password` is accepted for scripted setup, and warned about.
+ *
+ * Three ways in, in descending order of how safe they are:
+ *
+ *   (nothing)          prompt for it, with no echo
+ *   --password-stdin   read it from stdin
+ *   --password         take it from argv, and say why that is worse
+ *
+ * `--password-stdin` exists because argv is not private. Every process on the
+ * box can read another's command line out of /proc/<pid>/cmdline for as long
+ * as it runs, so a password passed that way is readable by any local account,
+ * including the unprivileged one this app runs as. A pipe is not.
  */
-async function readPassword(supplied, prompt = "Password") {
+async function readPassword(supplied, prompt = "Password", fromStdin = false) {
+  if (fromStdin) {
+    const chunks = [];
+    for await (const chunk of stdin) chunks.push(chunk);
+    // Only the trailing newline a pipe adds — a password may legitimately end
+    // in a space, and trimming it would change the credential silently.
+    const value = Buffer.concat(chunks).toString("utf8").replace(/\r?\n$/, "");
+    if (value.length < MIN_PASSWORD_CHARS) {
+      fail(`A password must be at least ${MIN_PASSWORD_CHARS} characters.`);
+    }
+    return value;
+  }
+
   if (typeof supplied === "string") {
-    console.warn("  note: a password passed as an argument is visible in your shell history.");
+    console.warn("  note: a password passed as an argument is visible in your shell history,");
+    console.warn("  and in the process list while this runs. --password-stdin avoids both.");
     return supplied;
   }
 
@@ -172,6 +195,7 @@ if (!command || args.help) {
       "  list                                  every account, role and project scope",
       "  add      --email --name --role        create an account (prompts for a password)",
       "           [--must-change]              require a new password at first sign-in",
+      "           [--password-stdin]           read the password from stdin, not argv",
       "  passwd   --email                      set a new password",
       "  role     --email --role               change the portfolio-wide role",
       "  scope    --email --projects           limit to projects, or 'all'",
@@ -217,7 +241,11 @@ switch (command) {
     if (!ROLES.includes(role)) fail(`--role must be one of: ${ROLES.join(", ")}.`);
 
     const projects = parseProjects(db, args.projects);
-    const password = await readPassword(args.password, `Password for ${email}`);
+    const password = await readPassword(
+      args.password,
+      `Password for ${email}`,
+      args["password-stdin"] === true
+    );
 
     try {
       const id = insertUser(db, {
@@ -242,7 +270,11 @@ switch (command) {
 
   case "passwd": {
     const user = requireUser(db, args);
-    const password = await readPassword(args.password, `New password for ${user.email}`);
+    const password = await readPassword(
+      args.password,
+      `New password for ${user.email}`,
+      args["password-stdin"] === true
+    );
     // Ends every session this account has open, here and elsewhere.
     updateUserRow(db, user.id, { password, mustChangePassword: false });
     console.log(`\n  Password changed for ${user.email}. Existing sessions have ended.\n`);

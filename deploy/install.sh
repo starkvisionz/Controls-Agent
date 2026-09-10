@@ -231,32 +231,6 @@ if [ "$WANT_DEMO" -eq 1 ]; then
     STARKVISIONZ_DB_PATH="$DATA_DIR/starkvisionz.db" npm run db:seed -- --demo-users
 fi
 
-# The first administrator. Without one the instance has no way in at all, so
-# folding it in here is the difference between one command and two.
-ADMIN_PASSWORD=""
-if [ -n "$ADMIN_EMAIL" ]; then
-  [ -n "$ADMIN_NAME" ] || ADMIN_NAME="${ADMIN_EMAIL%%@*}"
-
-  # Generated here rather than asked for: a password typed into a script's
-  # argv is in the shell history, and one chosen under time pressure during a
-  # deploy tends to be a weak one that then never gets changed. This is 24
-  # random characters, shown once, and the account must replace it at first
-  # sign-in — so what gets printed stops being the credential immediately.
-  ADMIN_PASSWORD="$(node -e 'process.stdout.write(require("crypto").randomBytes(18).toString("base64url"))')"
-
-  if sudo -u "$APP_USER" env -C "$APP_DIR" \
-       STARKVISIONZ_DB_PATH="$DATA_DIR/starkvisionz.db" \
-       npm run user -- add --email "$ADMIN_EMAIL" --name "$ADMIN_NAME" \
-         --role admin --password "$ADMIN_PASSWORD" --must-change >/dev/null 2>&1; then
-    note "created $ADMIN_EMAIL as administrator"
-  else
-    # Almost always "that email already exists" on a re-run, which is not a
-    # failure worth stopping an otherwise good install for.
-    ADMIN_PASSWORD=""
-    note "did not create $ADMIN_EMAIL — it probably already exists. Carrying on."
-  fi
-fi
-
 # ---------------------------------------------------------------------------
 say "Service"
 # ---------------------------------------------------------------------------
@@ -415,6 +389,47 @@ install -d -o "$APP_USER" -g "$APP_USER" -m 0750 "$DATA_DIR/backups"
 systemctl daemon-reload
 systemctl enable --quiet --now starkvisionz-backup.timer
 note "nightly backup to $DATA_DIR/backups, 14 kept"
+
+# ---------------------------------------------------------------------------
+say "First administrator"
+# ---------------------------------------------------------------------------
+# Deliberately the last thing that happens.
+#
+# The generated password is shown once, in the summary below. If the account
+# were created earlier — next to db:init, where it belongs logically — then any
+# `set -e` failure between there and here would exit with the account committed
+# and its password never printed. The rerun does not save you: it finds the
+# account already there, and the credential is gone for good.
+#
+# Creating it after everything that can fail means a failed install leaves no
+# account, and the rerun makes one cleanly.
+ADMIN_PASSWORD=""
+if [ -n "$ADMIN_EMAIL" ]; then
+  [ -n "$ADMIN_NAME" ] || ADMIN_NAME="${ADMIN_EMAIL%%@*}"
+
+  # Generated rather than asked for: a password typed into a script's argv is
+  # in the shell history, and one chosen under time pressure during a deploy
+  # tends to be weak and then permanent. 24 random characters, shown once, and
+  # the account must replace it at first sign-in — so what gets printed stops
+  # being the credential the moment it is used.
+  ADMIN_PASSWORD="$(node -e 'process.stdout.write(require("crypto").randomBytes(18).toString("base64url"))')"
+
+  # Through a pipe, not --password: argv is world-readable via /proc while the
+  # process runs, and the app's own unprivileged account is on this box.
+  if printf '%s' "$ADMIN_PASSWORD" | sudo -u "$APP_USER" env -C "$APP_DIR" \
+       STARKVISIONZ_DB_PATH="$DATA_DIR/starkvisionz.db" \
+       npm run --silent user -- add --email "$ADMIN_EMAIL" --name "$ADMIN_NAME" \
+         --role admin --password-stdin --must-change >/dev/null 2>&1; then
+    note "created $ADMIN_EMAIL as administrator"
+  else
+    ADMIN_PASSWORD=""
+    note "did not create $ADMIN_EMAIL — it most likely exists already from an"
+    note "  earlier run. Nothing was changed. To set a new starting password:"
+    note "    sudo -u $APP_USER env -C $APP_DIR \\"
+    note "      STARKVISIONZ_DB_PATH=$DATA_DIR/starkvisionz.db \\"
+    note "      npm run user -- passwd --email $ADMIN_EMAIL"
+  fi
+fi
 
 # ---------------------------------------------------------------------------
 scheme=http
