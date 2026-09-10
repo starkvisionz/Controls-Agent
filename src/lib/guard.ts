@@ -24,10 +24,28 @@ function deny(status: number, error: string): { ok: false; response: NextRespons
   return { ok: false, response: NextResponse.json({ error }, { status }) };
 }
 
-/** Authentication only — for endpoints about the caller rather than a project. */
-export function requireUser(req: Request): Guard {
+/**
+ * Authentication only — for endpoints about the caller rather than a project.
+ *
+ * An account still on a starting password somebody else set is refused
+ * everything until it picks its own. The sign-in screen already asks for a
+ * replacement, but that is the client asking: a caller holding the starting
+ * password can skip the page and use the API directly, which is the whole
+ * value of the password an administrator just read out or a deploy printed.
+ * `allowPendingPasswordChange` is for the two endpoints that have to keep
+ * working while it is pending — reading who you are, and setting the new one.
+ */
+export function requireUser(
+  req: Request,
+  { allowPendingPasswordChange = false }: { allowPendingPasswordChange?: boolean } = {}
+): Guard {
   const resolved = resolvePrincipal(req);
   if (!resolved.ok) return deny(resolved.status, resolved.reason);
+
+  if (resolved.principal.mustChangePassword && !allowPendingPasswordChange) {
+    return deny(403, "Set a new password before using this account.");
+  }
+
   return { ok: true, principal: resolved.principal };
 }
 

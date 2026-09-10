@@ -62,15 +62,27 @@ hand you.
 sudo git clone https://github.com/starkvisionz/Controls-Agent.git /opt/starkvisionz
 sudo /opt/starkvisionz/deploy/install.sh \
   --domain controls.example.com \
-  --email you@example.com
+  --email you@example.com \
+  --admin-email you@example.com
 ```
 
 Ten minutes, mostly `npm ci` and `next build`. It is idempotent: run it again
 after a `git pull` and it rebuilds and restarts without touching the database,
 the session secret or the certificate.
 
-Then create the first administrator — there is no sign-up page, and the install
-deliberately leaves the instance with no way in until you do this:
+`--admin-email` creates the first administrator and prints a generated password
+once, at the end. That password has to be replaced at first sign-in, and the
+refusal is the server's, not the sign-in page's: an account still on a starting
+password can authenticate and read who it is, and is refused everything else
+until it picks its own. So the string that scrolled past your terminal stops
+being a usable credential the moment the account is used — and a copy of it,
+from your scrollback or a deploy log, does not become one.
+
+The same holds for every account created from the Accounts view, since those
+start on a password an administrator chose for somebody else.
+
+Leave `--admin-email` off and the instance installs with no account and no
+sign-up page, which is to say no way in. Then make the account yourself:
 
 ```bash
 sudo -u starkvisionz env -C /opt/starkvisionz \
@@ -78,9 +90,9 @@ sudo -u starkvisionz env -C /opt/starkvisionz \
   npm run user -- add --email you@example.com --name 'Your Name' --role admin
 ```
 
-It prompts for the password rather than taking it as an argument, so it does not
-end up in your shell history. Sign in, then add everyone else from the Accounts
-view.
+That prompts for the password rather than taking it as an argument, so it does
+not end up in your shell history. Either way, sign in and add everyone else
+from the Accounts view.
 
 ### Options
 
@@ -88,6 +100,8 @@ view.
 |---|---|
 | `--domain <fqdn>` | Required. The name nginx serves and certbot certifies. |
 | `--email <address>` | Where Let's Encrypt sends expiry warnings. |
+| `--admin-email <addr>` | Create the first administrator. The password is generated, printed once, and must be changed at first sign-in. |
+| `--admin-name <name>` | Name on that account. Defaults to the part before the `@`. |
 | `--port <n>` | Loopback port for the app. Default 3000. |
 | `--no-tls` | Skip certbot — see the warning below. |
 | `--demo` | Also load the demo portfolio: three fictional projects and four shared demo accounts. Never on an instance holding real work. |

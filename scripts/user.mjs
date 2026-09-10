@@ -171,6 +171,7 @@ if (!command || args.help) {
       "",
       "  list                                  every account, role and project scope",
       "  add      --email --name --role        create an account (prompts for a password)",
+      "           [--must-change]              require a new password at first sign-in",
       "  passwd   --email                      set a new password",
       "  role     --email --role               change the portfolio-wide role",
       "  scope    --email --projects           limit to projects, or 'all'",
@@ -225,8 +226,11 @@ switch (command) {
         password,
         role,
         projects,
-        // Set by the person at the keyboard, so it is theirs to keep.
-        mustChangePassword: false,
+        // A password the person at the keyboard chose is theirs to keep. One a
+        // script generated is not: --must-change forces a reset at first login,
+        // so the generated string stops being the credential the moment it is
+        // used, rather than living on in whatever printed it.
+        mustChangePassword: args["must-change"] === true,
       });
       console.log(`\n  Created ${name} <${email}> as ${role}.`);
       console.log(`  Access: ${describeScope(db, id, role)}\n`);

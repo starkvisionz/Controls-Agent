@@ -16,7 +16,7 @@ export const dynamic = "force-dynamic";
  * gains nothing.
  */
 export async function GET(req: Request) {
-  const guard = requireUser(req);
+  const guard = requireUser(req, { allowPendingPasswordChange: true });
   if (!guard.ok) return guard.response;
 
   const { principal } = guard;

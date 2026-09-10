@@ -30,6 +30,8 @@ DOMAIN=""
 EMAIL=""
 PORT=3000
 WANT_TLS=1
+ADMIN_EMAIL=""
+ADMIN_NAME=""
 WANT_DEMO=0
 
 die() { printf '\n  %s\n\n' "$*" >&2; exit 1; }
@@ -44,6 +46,11 @@ Usage: install.sh --domain <fqdn> [--email <address>] [options]
                         VPS before running, or TLS issuance will fail.
   --email    <address>  Where Let's Encrypt sends expiry warnings.
   --port     <number>   Loopback port for the app (default 3000).
+  --admin-email <addr>  Create the first administrator, with a generated
+                        password printed once at the end. Without this the
+                        instance installs with no way in and you make the
+                        account yourself.
+  --admin-name <name>   Name on that account. Default: the part before the @.
   --no-tls              Skip certbot. Serves plain HTTP — for a VPS you reach
                         over a VPN, or when a certificate already exists.
   --demo                Also load the demo portfolio. Fictional projects and
@@ -59,6 +66,8 @@ while [ $# -gt 0 ]; do
     --port)   PORT="${2:-}"; shift 2 ;;
     --no-tls) WANT_TLS=0; shift ;;
     --demo)   WANT_DEMO=1; shift ;;
+    --admin-email) ADMIN_EMAIL="${2:-}"; shift 2 ;;
+    --admin-name)  ADMIN_NAME="${2:-}"; shift 2 ;;
     -h|--help) usage; exit 0 ;;
     *) usage; die "Unknown option: $1" ;;
   esac
@@ -220,6 +229,32 @@ if [ "$WANT_DEMO" -eq 1 ]; then
   note "loading the demo portfolio (--demo)"
   sudo -u "$APP_USER" env -C "$APP_DIR" \
     STARKVISIONZ_DB_PATH="$DATA_DIR/starkvisionz.db" npm run db:seed -- --demo-users
+fi
+
+# The first administrator. Without one the instance has no way in at all, so
+# folding it in here is the difference between one command and two.
+ADMIN_PASSWORD=""
+if [ -n "$ADMIN_EMAIL" ]; then
+  [ -n "$ADMIN_NAME" ] || ADMIN_NAME="${ADMIN_EMAIL%%@*}"
+
+  # Generated here rather than asked for: a password typed into a script's
+  # argv is in the shell history, and one chosen under time pressure during a
+  # deploy tends to be a weak one that then never gets changed. This is 24
+  # random characters, shown once, and the account must replace it at first
+  # sign-in — so what gets printed stops being the credential immediately.
+  ADMIN_PASSWORD="$(node -e 'process.stdout.write(require("crypto").randomBytes(18).toString("base64url"))')"
+
+  if sudo -u "$APP_USER" env -C "$APP_DIR" \
+       STARKVISIONZ_DB_PATH="$DATA_DIR/starkvisionz.db" \
+       npm run user -- add --email "$ADMIN_EMAIL" --name "$ADMIN_NAME" \
+         --role admin --password "$ADMIN_PASSWORD" --must-change >/dev/null 2>&1; then
+    note "created $ADMIN_EMAIL as administrator"
+  else
+    # Almost always "that email already exists" on a re-run, which is not a
+    # failure worth stopping an otherwise good install for.
+    ADMIN_PASSWORD=""
+    note "did not create $ADMIN_EMAIL — it probably already exists. Carrying on."
+  fi
 fi
 
 # ---------------------------------------------------------------------------
@@ -389,6 +424,16 @@ cat <<DONE
 
   Starkvisionz is running at $scheme://$DOMAIN
 
+$(if [ -n "$ADMIN_PASSWORD" ]; then cat <<ADMIN
+  Sign in as:
+
+    $ADMIN_EMAIL
+    $ADMIN_PASSWORD
+
+  That password is shown here and nowhere else, and it has to be changed at
+  first sign-in. Then add everyone else from the Accounts view.
+ADMIN
+else cat <<NOADMIN
   There is no sign-up page and no account yet. Create the first administrator:
 
     sudo -u $APP_USER env -C $APP_DIR \\
@@ -396,6 +441,8 @@ cat <<DONE
       npm run user -- add --email you@example.com --name 'Your Name' --role admin
 
   Then sign in and add the rest from the Accounts view.
+NOADMIN
+fi)
 
   Day to day:
     sudo systemctl status starkvisionz      how it is
