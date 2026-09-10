@@ -16,6 +16,7 @@ import {
 } from "@/components/ui/Controls";
 import { useProjects } from "@/components/shell/ProjectContext";
 import { useResource } from "@/lib/use-resource";
+import { ImportButton } from "@/components/import/ImportButton";
 import { daysBetween, percent, shortDate } from "@/lib/format";
 import type { Project, Task, WbsNode } from "@/lib/types";
 
@@ -27,7 +28,7 @@ const ZOOM_STEPS = [0.55, 0.9, 1.5, 2.6, 4.5];
 
 export function ScheduleView() {
   const { activeProjectId, refresh } = useProjects();
-  const { data, loading, error } = useResource<SchedulePayload>(
+  const { data, loading, error, reload } = useResource<SchedulePayload>(
     activeProjectId ? `/api/projects/${activeProjectId}/schedule` : null
   );
 
@@ -192,6 +193,17 @@ export function ScheduleView() {
             <ZoomIn />
           </IconButton>
         </div>
+        <ImportButton
+          register="tasks"
+          label="Activities"
+          permission="schedule:write"
+          onImported={() => {
+            reload();
+            // An import can move the project figures, and the status bar
+            // reads those from the portfolio rather than from this view.
+            refresh();
+          }}
+        />
       </Toolbar>
 
       <div className="@container flex-none border-b border-line px-3 py-2">

@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { EntityHistory } from "@/components/activity/EntityHistory";
 import { X } from "lucide-react";
 import { Badge, type Tone } from "@/components/ui/Badge";
 import { ReadOnlyNote } from "@/components/ui/Controls";
@@ -183,6 +184,7 @@ export function RiskDetail({
             {saving ? "Saving…" : dirty ? "Save assessment" : "No changes"}
           </button>
         </fieldset>
+        <EntityHistory entityType="risk" entityId={risk.id} />
       </div>
     </aside>
   );

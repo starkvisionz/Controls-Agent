@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { requirePermission, requireProjectRead } from "@/lib/guard";
+import { diffFields, recordAudit } from "@/lib/audit";
 import { checkRate, tooManyRequests } from "@/lib/rate-limit";
 import { getDb, one } from "@/lib/db";
 import { recalculateProject } from "@/lib/rollup";
@@ -69,6 +70,9 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }>
   const db = getDb();
   const entries = Object.entries(patch);
 
+  // Computed before the write, against the row as it stands.
+  const changes = diffFields(existing as unknown as Record<string, unknown>, patch);
+
   const write = db.transaction(() => {
     db.prepare(
       `UPDATE tasks SET ${entries.map(([k]) => `${k} = ?`).join(", ")} WHERE id = ?`
@@ -89,6 +93,21 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }>
 
     // The write is not finished until the money agrees with the schedule.
     recalculateProject(existing.project_id, db);
+
+    // Same transaction as the change, so the two cannot disagree.
+    recordAudit(
+      {
+        principal: guard.principal,
+        projectId: existing.project_id,
+        entityType: "task",
+        entityId: id,
+        entityLabel: existing.code,
+        action: "update",
+        summary: existing.name,
+        changes,
+      },
+      db
+    );
   });
 
   write();

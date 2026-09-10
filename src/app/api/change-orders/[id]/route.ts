@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getDb } from "@/lib/db";
 import { requirePermission, requireProjectRead } from "@/lib/guard";
+import { diffFields, recordAudit, type AuditAction } from "@/lib/audit";
 import { checkRate, tooManyRequests } from "@/lib/rate-limit";
 import {
   accountBelongsTo,
@@ -114,7 +115,21 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }>
 
   const db = getDb();
   // The reset above is part of the write, not a suggestion the caller may omit.
-  const entries = Object.entries({ ...patch, percent_complete: percentComplete });
+  const applied = { ...patch, percent_complete: percentComplete };
+  const entries = Object.entries(applied);
+  const changes = diffFields(existing as unknown as Record<string, unknown>, applied);
+
+  // Approving and rejecting get their own verbs. They are the events somebody
+  // scanning the log is looking for — an approval moves a budget, and reading
+  // that off a generic "update" means opening the diff to find out.
+  const action: AuditAction =
+    patch.status !== undefined && patch.status !== existing.status
+      ? patch.status === "approved"
+        ? "approve"
+        : patch.status === "rejected"
+          ? "reject"
+          : "update"
+      : "update";
 
   const write = db.transaction(() => {
     db.prepare(
@@ -123,6 +138,20 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }>
 
     // The write is not finished until the budgets agree with the register.
     applyChangeOrders(existing.project_id, db);
+
+    recordAudit(
+      {
+        principal: guard.principal,
+        projectId: existing.project_id,
+        entityType: "change_order",
+        entityId: id,
+        entityLabel: existing.code,
+        action,
+        summary: existing.title,
+        changes,
+      },
+      db
+    );
   });
 
   write();

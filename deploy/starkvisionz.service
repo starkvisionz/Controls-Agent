@@ -1,0 +1,49 @@
+[Unit]
+Description=Starkvisionz project controls
+Documentation=https://github.com/starkvisionz/Controls-Agent
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=starkvisionz
+Group=starkvisionz
+WorkingDirectory=/opt/starkvisionz
+
+# The secret, the database path and the proxy hop count live here, root-owned
+# and 0600. Keeping them out of the unit file means `systemctl cat` does not
+# print the session key.
+EnvironmentFile=/etc/starkvisionz/starkvisionz.env
+Environment=NODE_ENV=production
+
+# Binds to loopback only — nginx is the only thing that should reach it. The
+# host and port come from the environment file.
+ExecStart=/usr/bin/npm run serve
+
+Restart=on-failure
+RestartSec=3
+# A crash loop should be loud, not silent: five failures inside a minute stops
+# the unit so `systemctl status` shows why rather than churning forever.
+StartLimitBurst=5
+StartLimitIntervalSec=60
+
+# The database is the only thing this process has any business writing.
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictSUIDSGID=true
+LockPersonality=true
+ReadWritePaths=/var/lib/starkvisionz
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=starkvisionz
+
+[Install]
+WantedBy=multi-user.target

@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { NextResponse } from "next/server";
 import { getDb } from "@/lib/db";
 import { requirePermission, requireProjectRead } from "@/lib/guard";
+import { recordAudit } from "@/lib/audit";
 import { checkRate, tooManyRequests } from "@/lib/rate-limit";
 import {
   accountBelongsTo,
@@ -105,32 +106,50 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
 
   const db = getDb();
   const orderId = `co-${randomUUID().replace(/-/g, "").slice(0, 16)}`;
+  const code = nextChangeOrderCode(project.id);
 
-  db.prepare(
-    `INSERT INTO change_orders (id, project_id, cost_account_id, code, client_ref, title, origin,
-       status, cost_impact, schedule_impact_days, raised_date, submitted_date, decision_date,
-       owner, description)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)`
-  ).run(
-    orderId,
-    project.id,
-    input.cost_account_id ?? null,
-    nextChangeOrderCode(project.id),
-    input.client_ref ?? "",
-    input.title,
-    input.origin,
-    input.status,
-    input.cost_impact ?? 0,
-    input.schedule_impact_days ?? 0,
-    input.raised_date,
-    input.submitted_date ?? null,
-    input.owner ?? "",
-    input.description ?? ""
-  );
+  const write = db.transaction(() => {
+    db.prepare(
+      `INSERT INTO change_orders (id, project_id, cost_account_id, code, client_ref, title, origin,
+         status, cost_impact, schedule_impact_days, raised_date, submitted_date, decision_date,
+         owner, description)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)`
+    ).run(
+      orderId,
+      project.id,
+      input.cost_account_id ?? null,
+      code,
+      input.client_ref ?? "",
+      input.title,
+      input.origin,
+      input.status,
+      input.cost_impact ?? 0,
+      input.schedule_impact_days ?? 0,
+      input.raised_date,
+      input.submitted_date ?? null,
+      input.owner ?? "",
+      input.description ?? ""
+    );
 
-  // A new order is open, so it changes no budget — but running the chain keeps
-  // one path to the figures rather than a second one that "knows" it needn't.
-  applyChangeOrders(project.id);
+    // A new order is open, so it changes no budget — but running the chain keeps
+    // one path to the figures rather than a second one that "knows" it needn't.
+    applyChangeOrders(project.id, db);
+
+    recordAudit(
+      {
+        principal: guard.principal,
+        projectId: project.id,
+        entityType: "change_order",
+        entityId: orderId,
+        entityLabel: code,
+        action: "create",
+        summary: input.title,
+      },
+      db
+    );
+  });
+
+  write();
 
   return NextResponse.json(
     {

@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
 import { requirePermission } from "@/lib/guard";
+import { diffFields, recordAudit, type AuditAction } from "@/lib/audit";
 import { checkRate, tooManyRequests } from "@/lib/rate-limit";
+import { getDb } from "@/lib/db";
 import { countActiveAdmins, findUserById, toPublicUser, updateUser } from "@/lib/users";
 import { toFieldErrors, updateUserSchema } from "@/lib/validation";
 
@@ -72,8 +74,48 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }>
     );
   }
 
+  // Deactivation and a password reset are the two an administrator scans for,
+  // so they get their own verbs rather than hiding inside a generic update.
+  const action: AuditAction =
+    patch.is_active === false && existing.is_active === 1
+      ? "disable"
+      : patch.is_active === true && existing.is_active === 0
+        ? "enable"
+        : patch.password !== undefined
+          ? "reset-password"
+          : "update";
+
+  // The digest never reaches the log — diffFields redacts it. That the
+  // credential changed is carried by the action.
+  const changes = diffFields(existing as unknown as Record<string, unknown>, {
+    ...patch,
+    is_active: patch.is_active === undefined ? undefined : patch.is_active ? 1 : 0,
+    projects: patch.projects === undefined ? undefined : JSON.stringify(patch.projects),
+  });
+
   try {
-    return NextResponse.json({ user: updateUser(id, patch) });
+    // `updateUser` transacts internally; better-sqlite3 nests that as a
+    // savepoint, so wrapping both here still means the account change and the
+    // record of who made it land together or not at all.
+    const db = getDb();
+    const updated = db.transaction(() => {
+      const result = updateUser(id, patch, db);
+      recordAudit(
+        {
+          principal: guard.principal,
+          entityType: "account",
+          entityId: id,
+          entityLabel: existing.email,
+          action,
+          summary: existing.name,
+          changes,
+        },
+        db
+      );
+      return result;
+    })();
+
+    return NextResponse.json({ user: updated });
   } catch {
     return NextResponse.json(
       {

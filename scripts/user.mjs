@@ -37,7 +37,7 @@ function dbFile() {
 function openDb() {
   const file = dbFile();
   if (!fs.existsSync(file)) {
-    fail(`No database at ${file}. Run \`npm run db:seed\` first.`);
+    fail(`No database at ${file}. Run \`npm run db:init\` first (or \`npm run db:seed\` for the demo portfolio).`);
   }
   const db = new Database(file);
   db.pragma("foreign_keys = ON");

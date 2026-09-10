@@ -20,9 +20,43 @@ same tables the agent reads, so the dashboard and the agent never disagree.
 | **Risk** | 5×5 probability-impact matrix with click-through drilldown, exposure by category, and an editable risk inspector with mitigation tracking |
 | **Changes** | The change-order register — trends, submissions, approvals — with the budget movement each one causes, approval turnaround, and where the change is coming from |
 | **Documents** | Deliverable register with issue status, client review codes, overdue tracking, and approval progress by discipline |
+| **Activity** | Who changed what and when — the project's register history, and account changes for administrators |
 | **Agent** | A streaming chat panel that answers from the live database — cost variance, critical path, risk exposure, forecast basis, and recommendations |
 
 ![The Changes view — the register, and the budget it moves](docs/changes.png)
+
+### Importing
+
+Every register takes a file. The **Import** button sits in the toolbar of the
+Schedule, Risk, Changes and Documents views, and appears only for an account
+that may write to that register.
+
+| Format | Where it comes from |
+|---|---|
+| CSV / TSV | Anything. Quoted fields, embedded commas and a UTF-8 BOM are handled; the separator is detected. |
+| Excel `.xlsx` / `.xlsm` | The first sheet is read, and the workbook's other sheets are named so you know what was ignored. Percentage-formatted cells arrive as percentages, not as `0.6`. |
+| Primavera P6 `.xer` | Activity progress, actual and forecast dates, and total float. Matched on Activity ID, not P6's internal `task_id`, which changes between databases. |
+
+P6 stores durations in hours, so float is converted at eight hours to the day
+and the preview says so — a project on a different calendar will read low. MS
+Project XML is recognised and refused with instructions rather than parsed as a
+CSV with one enormous column.
+
+Import **updates** records; it does not create them. A row for something the
+project has never heard of is reported as not found rather than invented,
+because far more often it is the wrong file than a new record.
+
+Uploading shows a preview: which column was matched to which field, what was
+ignored, and — row by row — what would change, what is already right, what is
+not on this project and what was rejected. Nothing is written until the button
+under that preview is pressed. Column headings are matched loosely, so
+`Percent complete`, `Pct Complete`, `Progress` and `Phys Complete` all find the
+same field, and `84%`, `1,250` and `(400)` are read as the numbers a
+spreadsheet means by them.
+
+Applied rows go in one transaction — a part-applied file is the worst outcome
+available — and each one is recorded in the activity log, named after the file
+it came from, exactly as a typed edit would be.
 
 ## Running it
 
@@ -33,6 +67,25 @@ npm run dev         # http://localhost:3000
 ```
 
 The database is a local SQLite file; there is no external service to configure.
+
+### On a server
+
+One command on a fresh Debian or Ubuntu VPS, and about ten minutes:
+
+```bash
+sudo git clone https://github.com/starkvisionz/Controls-Agent.git /opt/starkvisionz
+sudo /opt/starkvisionz/deploy/install.sh --domain controls.example.com --email you@example.com
+```
+
+Node and nginx, a system account that can write nothing but its database, the
+build, a generated session secret, a systemd unit, a Let's Encrypt certificate
+and a nightly backup. Idempotent — run it again after `git pull` and it rebuilds
+and restarts without touching the database, the secret or the certificate.
+
+It deliberately leaves the instance with **no way in**: no demo data, no
+accounts. Create the first administrator by hand, on the host, when it finishes.
+[docs/DEPLOY.md](docs/DEPLOY.md) has the runbook — updates, backups and
+restores, and what each failure in the log actually means.
 
 ### Before you expose it
 
@@ -160,6 +213,7 @@ src/
     rollup-core.mjs       schedule -> cost roll-up, shared with the seeder
     change-orders-core.mjs  change register -> control-account budgets
     validation.ts         Zod schemas shared by the UI and the API
+    audit.ts              who changed what, written with the change itself
     rbac.ts               roles, permissions, and the one `can()` they answer
     auth.ts guard.ts      sessions, and the check every route runs
     users.ts              the account store, over accounts-core.mjs
@@ -276,6 +330,28 @@ edge middleware checks the signature and expiry, because that is all it can
 reach; the Node routes re-resolve the account against the database, which is
 where a since-revoked session is actually caught.
 
+**The audit row is written by the transaction that made the change.** An audit
+log that can disagree with the data is worse than none, because people believe
+it — so `recordAudit` takes the handle the caller is already writing through
+rather than opening its own. A write that rolls back takes its audit row with
+it, and a write that succeeds is always recorded.
+
+The log stores the diff rather than a snapshot: which fields moved, and what
+they moved from and to. A field submitted with the value it already held is not
+a change and is not recorded, or every save would look like an edit to
+everything. Password digests never reach it — that the credential changed is
+carried by the action instead.
+
+The actor's name and email are copied into the row rather than joined at read
+time. An account can be renamed or have its role changed, and the log has to
+say who made the change under the identity they held when they made it.
+
+Reading is scoped the way the data is. A project's history is as sensitive as
+the project, so it needs the same read permission; a record's history is
+authorised against the project that record belongs to rather than against the
+caller's claim about it. Account changes are administrator-only — a planner
+should see who moved an activity, not who changed somebody's role.
+
 **The agent gets a briefing, not a database handle.** Every chat turn rebuilds a
 plain-text snapshot of the project from the current tables and hands that to the
 model as its only source of fact. Answers stay current without the agent needing
@@ -324,11 +400,27 @@ instance-wide ceiling bounds the total regardless of where traffic comes from.
 
 Chat messages are capped and oversized bodies refused before buffering.
 
+**An import is previewed and applied from the same file, twice.** The browser
+posts the file once for a preview and again to commit, and the server re-derives
+the plan from scratch on the second pass rather than accepting the plan it
+handed out. That costs one extra parse and buys the guarantee that what was
+approved and what is applied are the same computation, rather than two that are
+hoped to agree — and a client cannot hand back an edited plan, because there is
+nowhere to hand one back to.
+
+Imported values go through the register's own Zod schema, so a percentage over
+100 is refused from a workbook exactly as it is from the inspector, and
+importing into a register needs that register's write permission — a planner may
+refresh the schedule from P6 and still not touch the risk register. A file
+listing the same record twice is rejected at the second occurrence rather than
+silently applying whichever line came last.
+
 **The schedule is a register, not a solver.** Starkvisionz stores predecessors, float
 and critical-path flags but does not run CPM. Editing a forecast date does not
 move successors or recompute float, and the activity inspector says so rather
-than letting a planner assume otherwise. A real scheduling layer — or ingesting
-calculated dates from P6/MSP — is the next step for that view.
+than letting a planner assume otherwise. Importing a P6 export brings in the
+dates and float P6 calculated, which is the usual way this gap is closed on a
+real job; a scheduling engine of its own is still a separate piece of work.
 
 ## CI
 
@@ -343,7 +435,8 @@ read or write is reachable without a session, that a forged cookie is refused,
 that each role is allowed exactly what its permissions say and refused the
 rest, that a scoped account cannot see or reach a project it was not granted,
 that changing an account ends the sessions it already had, that out-of-range and
-unknown fields are rejected, that a forged `X-Forwarded-For` cannot defeat the
+unknown fields are rejected, that an import preview writes nothing and a commit
+applies exactly the rows the preview approved, that a forged `X-Forwarded-For` cannot defeat the
 rate limit, and that the agent still streams SSE and quotes the current
 figures. It runs with no `ANTHROPIC_API_KEY`,
 so it exercises the local analyst and never depends on a provider.
@@ -354,11 +447,13 @@ so it exercises the local analyst and never depends on a provider.
 |---|---|
 | `npm run dev` | Development server on :3000 |
 | `npm run build` / `npm start` | Production build and serve |
-| `npm run db:seed` | Build and populate the database |
+| `npm run serve` | Serve on `$HOST`/`$PORT` — loopback by default, what the systemd unit runs |
+| `npm run db:init` | Create an empty database — schema only, for a real deployment |
+| `npm run db:seed` | Build and populate the database with the demo portfolio |
 | `npm run db:reset` | Delete and rebuild it |
 | `npm run typecheck` | `tsc --noEmit` |
 | `npm run lint` | ESLint over the whole tree |
-| `npm run smoke` | Assert the auth gate, roles, roll-up, change-order chain, validation and streaming against a running build |
+| `npm run smoke` | Assert the auth gate, roles, roll-up, change-order chain, import, validation and streaming against a running build |
 | `npm run user -- list` | Accounts, roles and project scope |
 | `npm run user -- add` | Create an account — the bootstrap path for the first one |
 | `npm run user -- secret` | Generate a `STARKVISIONZ_SESSION_SECRET` |

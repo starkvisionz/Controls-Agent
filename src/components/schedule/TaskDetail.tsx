@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { EntityHistory } from "@/components/activity/EntityHistory";
 import { X } from "lucide-react";
 import { Badge, type Tone } from "@/components/ui/Badge";
 import { ReadOnlyNote } from "@/components/ui/Controls";
@@ -173,6 +174,7 @@ export function TaskDetail({
             {saving ? "Saving…" : dirty ? "Save progress" : "No changes"}
           </button>
         </fieldset>
+        <EntityHistory entityType="task" entityId={task.id} />
       </div>
     </aside>
   );

@@ -7,8 +7,10 @@
     "dev": "next dev -p 3000",
     "build": "next build",
     "start": "next start -p 3000",
+    "serve": "next start -H ${HOST:-127.0.0.1} -p ${PORT:-3000}",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
+    "db:init": "node scripts/db-init.mjs",
     "db:seed": "node scripts/seed.mjs",
     "db:reset": "rm -f data/starkvisionz.db data/starkvisionz.db-wal data/starkvisionz.db-shm && npm run db:seed",
     "user": "node scripts/user.mjs",
@@ -17,6 +19,7 @@
   "dependencies": {
     "@anthropic-ai/sdk": "^0.120.0",
     "better-sqlite3": "^13.0.3",
+    "exceljs": "^4.4.0",
     "lucide-react": "^0.545.0",
     "next": "^15.5.4",
     "react": "^19.2.0",

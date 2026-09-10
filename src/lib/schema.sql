@@ -320,3 +320,40 @@ CREATE TABLE IF NOT EXISTS user_projects (
 );
 
 CREATE INDEX IF NOT EXISTS idx_user_projects_user ON user_projects(user_id);
+
+-- ---------------------------------------------------------------------------
+-- Audit trail
+--
+-- Append-only. Rows are written inside the same transaction as the change they
+-- describe, so a write that succeeds is always recorded and one that rolls back
+-- leaves nothing behind — an audit log that can disagree with the data is worse
+-- than none, because it is trusted.
+--
+-- The actor's name and email are copied in rather than joined at read time. An
+-- account can be renamed or have its role changed, and the log has to say who
+-- made the change under the identity they held when they made it.
+--
+-- `changes` is a JSON array of {field, from, to}. Storing the diff rather than
+-- a snapshot keeps the row small and makes "what actually moved" the thing the
+-- table is about.
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS audit_events (
+  id                TEXT PRIMARY KEY,
+  at                TEXT NOT NULL DEFAULT (datetime('now')),
+  -- Not a foreign key: the log outlives whatever it points at, and a deleted
+  -- project must not take its history with it.
+  actor_id          TEXT NOT NULL,
+  actor_name        TEXT NOT NULL,
+  actor_email       TEXT NOT NULL,
+  project_id        TEXT,
+  entity_type       TEXT NOT NULL,   -- task | risk | document | change_order | user | account
+  entity_id         TEXT NOT NULL,
+  entity_label      TEXT NOT NULL DEFAULT '',  -- "CO-002", "A1691" — readable without a join
+  action            TEXT NOT NULL,   -- create | update | approve | reject | disable | enable | sign-in
+  summary           TEXT NOT NULL DEFAULT '',
+  changes           TEXT NOT NULL DEFAULT '[]'
+);
+
+CREATE INDEX IF NOT EXISTS idx_audit_project ON audit_events(project_id, at DESC);
+CREATE INDEX IF NOT EXISTS idx_audit_entity  ON audit_events(entity_type, entity_id, at DESC);
+CREATE INDEX IF NOT EXISTS idx_audit_actor   ON audit_events(actor_id, at DESC);

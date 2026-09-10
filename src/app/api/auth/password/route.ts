@@ -2,6 +2,8 @@ import { NextResponse } from "next/server";
 import { authMode, issueSession, sessionCookieOptions, SESSION_COOKIE } from "@/lib/auth";
 import { requireUser } from "@/lib/guard";
 import { checkRate, tooManyRequests } from "@/lib/rate-limit";
+import { getDb } from "@/lib/db";
+import { recordAudit } from "@/lib/audit";
 import { findUserById, setOwnPassword, verifyPassword } from "@/lib/users";
 import { changePasswordSchema, toFieldErrors } from "@/lib/validation";
 
@@ -49,7 +51,21 @@ export async function POST(req: Request) {
     );
   }
 
-  setOwnPassword(principal.id, parsed.data.new_password);
+  const db = getDb();
+  db.transaction(() => {
+    setOwnPassword(principal.id, parsed.data.new_password, db);
+    recordAudit(
+      {
+        principal,
+        entityType: "account",
+        entityId: principal.id,
+        entityLabel: principal.email,
+        action: "reset-password",
+        summary: "changed their own password",
+      },
+      db
+    );
+  })();
 
   // The change bumps session_version, which revokes every cookie issued before
   // it — including this caller's. Re-issuing here means the person who made the
