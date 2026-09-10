@@ -101,7 +101,30 @@ export async function middleware(req: NextRequest) {
     return NextResponse.json({ error: "Authentication required" }, { status: 401 });
   }
 
-  const login = req.nextUrl.clone();
+  // Build the redirect from the name the browser actually asked for.
+  //
+  // `req.nextUrl` carries the origin this process is bound to — localhost:3000
+  // — not the host in the request. Behind any reverse proxy that sends the
+  // caller somewhere dead: reaching / on the deployed site redirected to
+  // https://localhost:3000/login. Seen through the Cloudflare Tunnel, and it
+  // reproduces against the app on its own, so it is not the tunnel's doing.
+  //
+  // The Host header is the right source and X-Forwarded-Host is not, even
+  // though it looks more official. A browser sets Host from the address bar
+  // and will not send one for a site it is not visiting, whereas
+  // X-Forwarded-Host is an extra header an attacker can inject through some
+  // proxies — and a login redirect pointed at a host they control is a
+  // credential harvest. Neither this app nor its nginx sites ever set it, so
+  // it is ignored rather than preferred.
+  //
+  // The scheme comes from X-Forwarded-Proto, which both nginx sites do set,
+  // because the last hop to the app is plain http even when the browser is on
+  // https — without it every redirect would downgrade.
+  const host = req.headers.get("host");
+  const proto = req.headers.get("x-forwarded-proto")?.split(",")[0].trim();
+  const login = host
+    ? new URL(`${proto || req.nextUrl.protocol.replace(":", "")}://${host}`)
+    : req.nextUrl.clone();
   login.pathname = "/login";
   login.search = "";
   // Send them back where they were once they are through.
