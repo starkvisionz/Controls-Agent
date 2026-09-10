@@ -83,6 +83,12 @@ build, a generated session secret, a systemd unit, a Let's Encrypt certificate
 and a nightly backup. Idempotent — run it again after `git pull` and it rebuilds
 and restarts without touching the database, the secret or the certificate.
 
+If inbound 80/443 cannot reach the box — an intercepting host, a NAT you do
+not control — add `--tunnel` and it serves through a Cloudflare Tunnel instead:
+nginx on loopback, no port opened, Cloudflare terminating TLS for the hostname.
+[docs/DEPLOY.md](docs/DEPLOY.md) has the three browser-authorised commands that
+finishes with.
+
 No demo data. `--admin-email` makes the one account you need and prints a
 generated password once; the app is gated behind replacing it at first sign-in,
 so the string that scrolled past your terminal stops being the credential as
