@@ -89,6 +89,10 @@ nginx on loopback, no port opened, Cloudflare terminating TLS for the hostname.
 [docs/DEPLOY.md](docs/DEPLOY.md) has the three browser-authorised commands that
 finishes with.
 
+Not a VPS? [docs/RAILWAY.md](docs/RAILWAY.md) deploys the same code on Railway,
+where a real container and a mounted volume mean the SQLite data layer runs
+unchanged.
+
 No demo data. `--admin-email` makes the one account you need and prints a
 generated password once; the app is gated behind replacing it at first sign-in,
 so the string that scrolled past your terminal stops being the credential as
