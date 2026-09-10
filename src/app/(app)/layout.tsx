@@ -22,25 +22,36 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   if (!resolved.ok) redirect("/login");
 
   const row = resolved.principal.development ? undefined : findUserById(resolved.principal.id);
+  const mustChangePassword = row?.must_change_password === 1;
 
   // The portfolio travels with the first HTML. Fetching it from the browser
   // instead put a blocking round trip in front of every page load: nothing
   // could ask for its own data until the active project was known. The same
   // filter as /api/projects, because it is the same question.
-  const projects = listProjects()
-    .filter((p) => roleOnProject(resolved.principal, p.id) !== null)
-    .map((p) => ({
-      ...p,
-      metrics: projectMetrics(p),
-      role: roleOnProject(resolved.principal, p.id),
-    }));
+  //
+  // Not while a starting password is pending, though. The shell renders the
+  // password prompt instead of the registers in that state, but rendering
+  // nothing is not the same as sending nothing: these rows are serialised into
+  // the payload whether or not a component draws them, so a caller who never
+  // chose a password would receive project names, clients and contract values
+  // by reading the response. The API refuses such a session; this is the same
+  // refusal, and it has to be made before the query, not after.
+  const projects = mustChangePassword
+    ? []
+    : listProjects()
+        .filter((p) => roleOnProject(resolved.principal, p.id) !== null)
+        .map((p) => ({
+          ...p,
+          metrics: projectMetrics(p),
+          role: roleOnProject(resolved.principal, p.id),
+        }));
 
   return (
     <DesktopShell
       principal={resolved.principal}
       projects={projects}
       authEnforced={mode.kind === "enforced"}
-      mustChangePassword={row?.must_change_password === 1}
+      mustChangePassword={mustChangePassword}
     >
       {children}
     </DesktopShell>

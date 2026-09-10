@@ -74,7 +74,8 @@ One command on a fresh Debian or Ubuntu VPS, and about ten minutes:
 
 ```bash
 sudo git clone https://github.com/starkvisionz/Controls-Agent.git /opt/starkvisionz
-sudo /opt/starkvisionz/deploy/install.sh --domain controls.example.com --email you@example.com
+sudo /opt/starkvisionz/deploy/install.sh --domain controls.example.com \
+  --email you@example.com --admin-email you@example.com
 ```
 
 Node and nginx, a system account that can write nothing but its database, the
@@ -82,10 +83,20 @@ build, a generated session secret, a systemd unit, a Let's Encrypt certificate
 and a nightly backup. Idempotent — run it again after `git pull` and it rebuilds
 and restarts without touching the database, the secret or the certificate.
 
-It deliberately leaves the instance with **no way in**: no demo data, no
-accounts. Create the first administrator by hand, on the host, when it finishes.
+If inbound 80/443 cannot reach the box — an intercepting host, a NAT you do
+not control — add `--tunnel` and it serves through a Cloudflare Tunnel instead:
+nginx on loopback, no port opened, Cloudflare terminating TLS for the hostname.
+[docs/DEPLOY.md](docs/DEPLOY.md) has the three browser-authorised commands that
+finishes with.
+
+No demo data. `--admin-email` makes the one account you need and prints a
+generated password once; the app is gated behind replacing it at first sign-in,
+so the string that scrolled past your terminal stops being the credential as
+soon as you use it. Leave the flag off and the instance installs with **no way
+in** — no accounts, no sign-up page — and you create the administrator by hand.
 [docs/DEPLOY.md](docs/DEPLOY.md) has the runbook — updates, backups and
-restores, and what each failure in the log actually means.
+restores, the DNS and port-80 checks, and what each failure in the log actually
+means.
 
 ### Before you expose it
 

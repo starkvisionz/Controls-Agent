@@ -97,6 +97,11 @@ export type Principal = {
   grants: ProjectGrant[];
   /** True when no credential is configured and the app is open for local development. */
   development: boolean;
+  /**
+   * True while the account is still on a starting password somebody else set.
+   * The guard refuses everything but changing it — see `requireUser`.
+   */
+  mustChangePassword: boolean;
 };
 
 /** The role this principal holds on one project, or null if it holds none. */

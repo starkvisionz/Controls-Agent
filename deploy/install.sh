@@ -30,6 +30,10 @@ DOMAIN=""
 EMAIL=""
 PORT=3000
 WANT_TLS=1
+WANT_TUNNEL=0
+TUNNEL_PORT=8080
+ADMIN_EMAIL=""
+ADMIN_NAME=""
 WANT_DEMO=0
 
 die() { printf '\n  %s\n\n' "$*" >&2; exit 1; }
@@ -44,6 +48,15 @@ Usage: install.sh --domain <fqdn> [--email <address>] [options]
                         VPS before running, or TLS issuance will fail.
   --email    <address>  Where Let's Encrypt sends expiry warnings.
   --port     <number>   Loopback port for the app (default 3000).
+  --admin-email <addr>  Create the first administrator, with a generated
+                        password printed once at the end. Without this the
+                        instance installs with no way in and you make the
+                        account yourself.
+  --admin-name <name>   Name on that account. Default: the part before the @.
+  --tunnel              Serve through a Cloudflare Tunnel instead of opening
+                        ports. nginx binds loopback, certbot is skipped, and
+                        Cloudflare terminates TLS for the hostname. Use this
+                        when inbound 80/443 cannot reach the machine.
   --no-tls              Skip certbot. Serves plain HTTP — for a VPS you reach
                         over a VPN, or when a certificate already exists.
   --demo                Also load the demo portfolio. Fictional projects and
@@ -59,6 +72,9 @@ while [ $# -gt 0 ]; do
     --port)   PORT="${2:-}"; shift 2 ;;
     --no-tls) WANT_TLS=0; shift ;;
     --demo)   WANT_DEMO=1; shift ;;
+    --tunnel) WANT_TUNNEL=1; WANT_TLS=0; shift ;;
+    --admin-email) ADMIN_EMAIL="${2:-}"; shift 2 ;;
+    --admin-name)  ADMIN_NAME="${2:-}"; shift 2 ;;
     -h|--help) usage; exit 0 ;;
     *) usage; die "Unknown option: $1" ;;
   esac
@@ -83,7 +99,10 @@ fi
 # error three sections later with nothing pointing at the cause. A VPS image
 # with a preinstalled Docker stack (Traefik, Caddy, a panel) is the usual
 # reason, and those come back on reboot unless their restart policy changes.
-holders="$(ss -lntpH 2>/dev/null | awk '$4 ~ /:(80|443)$/ {print}')"
+holders=""
+if [ "$WANT_TUNNEL" -eq 0 ]; then
+  holders="$(ss -lntpH 2>/dev/null | awk '$4 ~ /:(80|443)$/ {print}')"
+fi
 if [ -n "$holders" ]; then
   if printf '%s\n' "$holders" | grep -qv 'nginx'; then
     printf '\n' >&2
@@ -158,8 +177,11 @@ else
   # Secure cookie back over plain http — so on a --no-tls install a correct
   # password would bounce straight back to the login page. Turn it off here
   # rather than leaving that to be discovered.
+  # Not in tunnel mode: Cloudflare terminates TLS, so the browser really is on
+  # https and the Secure flag is correct there. Only a genuinely plain-HTTP
+  # instance needs the opt-out.
   cookie_note=""
-  if [ "$WANT_TLS" -eq 0 ]; then
+  if [ "$WANT_TLS" -eq 0 ] && [ "$WANT_TUNNEL" -eq 0 ]; then
     cookie_note="
 # No TLS on this instance, so the Secure flag would stop the browser returning
 # the session cookie at all. Sessions and passwords cross the network in the
@@ -178,9 +200,11 @@ STARKVISIONZ_SESSION_SECRET=$secret
 # cannot delete it.
 STARKVISIONZ_DB_PATH=$DATA_DIR/starkvisionz.db
 
-# Exactly one reverse proxy (the nginx site below) sits in front. Raising this
-# without adding a real proxy would let a caller forge the address the rate
-# limiter keys on.
+# One hop of forwarding header to believe. In the plain nginx site that is
+# nginx itself; behind the tunnel the site rewrites X-Forwarded-For to
+# Cloudflare's CF-Connecting-IP, so the chain is one entry either way. Raising
+# this without adding a real proxy would let a caller forge the address the
+# rate limiter keys on.
 STARKVISIONZ_TRUSTED_PROXIES=1
 
 HOST=127.0.0.1
@@ -243,7 +267,13 @@ note "starkvisionz is running on 127.0.0.1:$PORT"
 say "nginx"
 # ---------------------------------------------------------------------------
 site=/etc/nginx/sites-available/starkvisionz
-if [ -f "$site" ] && grep -q "managed by Certbot" "$site"; then
+if [ "$WANT_TUNNEL" -eq 1 ]; then
+  sed -e "s/__PORT__/$PORT/g" -e "s/__TUNNEL_PORT__/$TUNNEL_PORT/g" \
+    "$APP_DIR/deploy/nginx-tunnel.conf" > "$site"
+  ln -sf "$site" /etc/nginx/sites-enabled/starkvisionz
+  rm -f /etc/nginx/sites-enabled/default
+  note "wrote $site on 127.0.0.1:$TUNNEL_PORT — loopback only, no port opened"
+elif [ -f "$site" ] && grep -q "managed by Certbot" "$site"; then
   note "keeping the existing site (Certbot has edited it)"
 else
   sed -e "s/__DOMAIN__/$DOMAIN/g" -e "s/__PORT__/$PORT/g" \
@@ -259,7 +289,11 @@ systemctl reload nginx
 # ---------------------------------------------------------------------------
 say "Firewall"
 # ---------------------------------------------------------------------------
-if command -v ufw >/dev/null 2>&1 && ufw status | grep -q "Status: active"; then
+if [ "$WANT_TUNNEL" -eq 1 ]; then
+  note "nothing to open — the tunnel dials out, and nginx is on loopback."
+  note "  That is what makes this work on a host whose inbound 80/443 is"
+  note "  blocked or intercepted upstream."
+elif command -v ufw >/dev/null 2>&1 && ufw status | grep -q "Status: active"; then
   ufw allow 'Nginx Full' >/dev/null
   note "opened 80 and 443 (ufw)"
 else
@@ -269,7 +303,11 @@ fi
 # ---------------------------------------------------------------------------
 say "TLS"
 # ---------------------------------------------------------------------------
-if [ "$WANT_TLS" -eq 0 ]; then
+if [ "$WANT_TUNNEL" -eq 1 ]; then
+  note "Cloudflare terminates TLS for $DOMAIN — no certificate is issued here,"
+  note "  and none is needed. Session cookies stay Secure, because the browser"
+  note "  really is on https; only this last loopback hop is plain."
+elif [ "$WANT_TLS" -eq 0 ]; then
   note "skipped (--no-tls). This instance serves plain HTTP: sessions and"
   note "passwords cross the network in the clear. Do not expose it publicly."
 elif [ -d "/etc/letsencrypt/live/$DOMAIN" ]; then
@@ -345,6 +383,32 @@ const go = async (f) => { try { return await f(); } catch { return []; } };
 fi
 
 # ---------------------------------------------------------------------------
+if [ "$WANT_TUNNEL" -eq 1 ]; then
+say "Cloudflare Tunnel"
+# ---------------------------------------------------------------------------
+if command -v cloudflared >/dev/null 2>&1; then
+  note "cloudflared $(cloudflared --version 2>/dev/null | awk '{print $3}') already installed"
+else
+  # Cloudflare's own apt repository, so `apt upgrade` keeps it current — a
+  # tunnel client that falls behind stops connecting.
+  curl -fsSL https://pkg.cloudflare.com/cloudflare-main.gpg \
+    > /usr/share/keyrings/cloudflare-main.gpg
+  echo "deb [signed-by=/usr/share/keyrings/cloudflare-main.gpg] https://pkg.cloudflare.com/cloudflared any main" \
+    > /etc/apt/sources.list.d/cloudflared.list
+  apt-get update -qq
+  apt-get install -y -qq cloudflared >/dev/null
+  note "installed cloudflared $(cloudflared --version 2>/dev/null | awk '{print $3}')"
+fi
+
+if systemctl is-active --quiet cloudflared 2>/dev/null; then
+  note "the cloudflared service is already running — leaving it alone"
+  TUNNEL_READY=1
+else
+  TUNNEL_READY=0
+fi
+fi
+
+# ---------------------------------------------------------------------------
 say "Backups"
 # ---------------------------------------------------------------------------
 install -m 0755 "$APP_DIR/deploy/backup.sh" /usr/local/bin/starkvisionz-backup
@@ -382,13 +446,94 @@ systemctl enable --quiet --now starkvisionz-backup.timer
 note "nightly backup to $DATA_DIR/backups, 14 kept"
 
 # ---------------------------------------------------------------------------
+say "First administrator"
+# ---------------------------------------------------------------------------
+# Deliberately the last thing that happens.
+#
+# The generated password is shown once, in the summary below. If the account
+# were created earlier — next to db:init, where it belongs logically — then any
+# `set -e` failure between there and here would exit with the account committed
+# and its password never printed. The rerun does not save you: it finds the
+# account already there, and the credential is gone for good.
+#
+# Creating it after everything that can fail means a failed install leaves no
+# account, and the rerun makes one cleanly.
+ADMIN_PASSWORD=""
+if [ -n "$ADMIN_EMAIL" ]; then
+  [ -n "$ADMIN_NAME" ] || ADMIN_NAME="${ADMIN_EMAIL%%@*}"
+
+  # Generated rather than asked for: a password typed into a script's argv is
+  # in the shell history, and one chosen under time pressure during a deploy
+  # tends to be weak and then permanent. 24 random characters, shown once, and
+  # the account must replace it at first sign-in — so what gets printed stops
+  # being the credential the moment it is used.
+  ADMIN_PASSWORD="$(node -e 'process.stdout.write(require("crypto").randomBytes(18).toString("base64url"))')"
+
+  # Through a pipe, not --password: argv is world-readable via /proc while the
+  # process runs, and the app's own unprivileged account is on this box.
+  if printf '%s' "$ADMIN_PASSWORD" | sudo -u "$APP_USER" env -C "$APP_DIR" \
+       STARKVISIONZ_DB_PATH="$DATA_DIR/starkvisionz.db" \
+       npm run --silent user -- add --email "$ADMIN_EMAIL" --name "$ADMIN_NAME" \
+         --role admin --password-stdin --must-change >/dev/null 2>&1; then
+    note "created $ADMIN_EMAIL as administrator"
+  else
+    ADMIN_PASSWORD=""
+    note "did not create $ADMIN_EMAIL — it most likely exists already from an"
+    note "  earlier run. Nothing was changed. To set a new starting password:"
+    note "    sudo -u $APP_USER env -C $APP_DIR \\"
+    note "      STARKVISIONZ_DB_PATH=$DATA_DIR/starkvisionz.db \\"
+    note "      npm run user -- passwd --email $ADMIN_EMAIL"
+  fi
+fi
+
+# ---------------------------------------------------------------------------
 scheme=http
 [ -d "/etc/letsencrypt/live/$DOMAIN" ] && scheme=https
+[ "$WANT_TUNNEL" -eq 1 ] && scheme=https
 
 cat <<DONE
 
-  Starkvisionz is running at $scheme://$DOMAIN
+$(if [ "$WANT_TUNNEL" -eq 1 ] && [ "${TUNNEL_READY:-0}" -eq 0 ]; then cat <<TUNNEL
+  The app is up on 127.0.0.1:$TUNNEL_PORT. It is not reachable yet — the tunnel
+  is the last step, and it needs a browser to authorise, so it cannot be done
+  from a script. Three commands:
 
+    cloudflared tunnel login
+    cloudflared tunnel create starkvisionz
+    cloudflared tunnel route dns starkvisionz $DOMAIN
+
+  The first opens a link; pick $DOMAIN from the list. Then write
+  /etc/cloudflared/config.yml — the UUID is printed by 'tunnel create':
+
+    tunnel: <UUID>
+    credentials-file: /root/.cloudflared/<UUID>.json
+    ingress:
+      - hostname: $DOMAIN
+        service: http://127.0.0.1:$TUNNEL_PORT
+      - service: http_status:404
+
+  And start it:
+
+    sudo cloudflared service install
+    sudo systemctl enable --now cloudflared
+
+  $DOMAIN is then live over Cloudflare's TLS, with no inbound port open here.
+TUNNEL
+else cat <<LIVE
+  Starkvisionz is running at $scheme://$DOMAIN
+LIVE
+fi)
+
+$(if [ -n "$ADMIN_PASSWORD" ]; then cat <<ADMIN
+  Sign in as:
+
+    $ADMIN_EMAIL
+    $ADMIN_PASSWORD
+
+  That password is shown here and nowhere else, and it has to be changed at
+  first sign-in. Then add everyone else from the Accounts view.
+ADMIN
+else cat <<NOADMIN
   There is no sign-up page and no account yet. Create the first administrator:
 
     sudo -u $APP_USER env -C $APP_DIR \\
@@ -396,6 +541,8 @@ cat <<DONE
       npm run user -- add --email you@example.com --name 'Your Name' --role admin
 
   Then sign in and add the rest from the Accounts view.
+NOADMIN
+fi)
 
   Day to day:
     sudo systemctl status starkvisionz      how it is

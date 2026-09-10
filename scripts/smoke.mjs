@@ -104,6 +104,19 @@ async function signIn(email) {
     headers: json,
     body: JSON.stringify({ email, password: PASSWORD }),
   });
+  // A drained login bucket returned null here, and every later assertion using
+  // the empty cookie then failed with 401 — which reads as "wrong password"
+  // and sends you looking in the wrong place entirely. The bucket is shared
+  // and holds ten, so a suite that adds sign-ins can cross it; say so.
+  if (res.status === 429) {
+    console.error(
+      `\nsmoke: the login rate limit is exhausted (signing in as ${email}).\n` +
+        "  The bucket is per-client and holds 10. Either this is a re-run\n" +
+        "  against a server the rate-limit section already drained — restart\n" +
+        "  it — or the suite has grown more sign-ins than the bucket allows.\n"
+    );
+    process.exit(1);
+  }
   if (res.status !== 200) return null;
   return (res.headers.get("set-cookie") ?? "").split(";")[0];
 }
@@ -371,6 +384,99 @@ const selfDemote = await get(`/api/users/${adminId}`, {
   body: JSON.stringify({ role: "viewer" }),
 });
 check("an administrator cannot demote itself", selfDemote.status === 422, `status ${selfDemote.status}`);
+
+// ---------------------------------------------------------------------------
+// A starting password is not a working credential
+// ---------------------------------------------------------------------------
+console.log("\nstarting passwords");
+
+// Every account an administrator creates lands with must_change_password set,
+// and so does one an installer generated. The sign-in screen asks for a
+// replacement — but that is the client asking, and a caller holding the
+// starting password can ignore the page and call the API. These assert that
+// the server refuses it, because the starting password is the one that gets
+// read out over a phone, pasted into a chat, or left in a deploy log.
+const STARTING = "starting-password-abc";
+const CHOSEN = "the-one-they-picked-99";
+const pendingEmail = `pending-${Date.now()}@starkvisionz.example`;
+
+const madePending = await get("/api/users", {
+  method: "POST",
+  headers: authed,
+  body: JSON.stringify({
+    email: pendingEmail,
+    name: "Pending Person",
+    role: "admin",
+    password: STARTING,
+  }),
+});
+check("an admin-created account is made", madePending.status === 201, `status ${madePending.status}`);
+
+const pendingLogin = await get("/api/auth/login", {
+  method: "POST",
+  headers: json,
+  body: JSON.stringify({ email: pendingEmail, password: STARTING }),
+});
+const pendingCookie = (pendingLogin.headers.get("set-cookie") ?? "").split(";")[0];
+const pending = { ...json, cookie: pendingCookie };
+
+// Sign-in has to succeed, or there would be no way to set the new password.
+check("it can sign in with the starting password", pendingLogin.status === 200, `status ${pendingLogin.status}`);
+check(
+  "the response says the password is still the one it was given",
+  (await pendingLogin.clone().json()).user?.must_change_password === true
+);
+
+const pendingRead = await get("/api/projects", { headers: pending });
+check("but it may not read the API", pendingRead.status === 403, `status ${pendingRead.status}`);
+
+const pendingWrite = await get("/api/users", {
+  method: "POST",
+  headers: pending,
+  body: JSON.stringify({
+    email: `never-${Date.now()}@starkvisionz.example`,
+    name: "Never",
+    role: "viewer",
+    password: "another-password-here",
+  }),
+});
+check("and it may not write — an admin role does not help", pendingWrite.status === 403, `status ${pendingWrite.status}`);
+
+check(
+  "it can still read who it is, or the sign-in screen could not render",
+  (await get("/api/auth/me", { headers: pending })).status === 200
+);
+
+// Refusing the API is only half of it. The app layout renders on the server and
+// serialises the portfolio into the payload, so a page can hand over rows that
+// no component draws — the password prompt is on screen, and the project names
+// and contract values are in the response body behind it. Assert on the bytes,
+// not on what is visible.
+const pendingPage = await get("/", { headers: pending });
+const pendingHtml = await pendingPage.text();
+const leaked = ["Gulf Coast LNG", "Sabine Midstream", "Cameron Parish", "486000000"].filter((s) =>
+  pendingHtml.includes(s)
+);
+check("the page it is served renders", pendingPage.status === 200, `status ${pendingPage.status}`);
+check(
+  "and carries no project data in its payload",
+  leaked.length === 0,
+  leaked.length ? `leaked: ${leaked.join(", ")}` : `${pendingHtml.length} bytes, none of it the portfolio`
+);
+
+const changed = await get("/api/auth/password", {
+  method: "POST",
+  headers: pending,
+  body: JSON.stringify({ current_password: STARTING, new_password: CHOSEN }),
+});
+check("it can set its own password", changed.status === 200, `status ${changed.status}`);
+
+// The change bumps session_version, so the route re-issues the cookie.
+const freshCookie = (changed.headers.get("set-cookie") ?? "").split(";")[0];
+check(
+  "the re-issued session works immediately",
+  (await get("/api/projects", { headers: { ...json, cookie: freshCookie } })).status === 200
+);
 
 // ---------------------------------------------------------------------------
 // Validation

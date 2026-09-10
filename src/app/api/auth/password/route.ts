@@ -12,7 +12,7 @@ export const dynamic = "force-dynamic";
 
 /** Changing your own password. Administrators reset other people's via /api/users. */
 export async function POST(req: Request) {
-  const guard = requireUser(req);
+  const guard = requireUser(req, { allowPendingPasswordChange: true });
   if (!guard.ok) return guard.response;
 
   const { principal } = guard;

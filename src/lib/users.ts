@@ -119,6 +119,7 @@ export function toPrincipal(row: UserRow): Principal {
     role: isRole(row.role) ? row.role : "viewer",
     grants: grantsFor(row.id),
     development: false,
+    mustChangePassword: row.must_change_password === 1,
   };
 }
 

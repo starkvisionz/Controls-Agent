@@ -82,6 +82,7 @@ export const DEVELOPMENT_PRINCIPAL: Principal = {
   role: "admin",
   grants: [],
   development: true,
+  mustChangePassword: false,
 };
 
 // ---------------------------------------------------------------------------
