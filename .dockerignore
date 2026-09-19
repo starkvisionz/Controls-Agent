@@ -1,0 +1,21 @@
+# Anything the build does not need, both to keep the image small and to stop a
+# local database or .env being baked into it.
+.git
+.github
+node_modules
+.next
+out
+build
+dist
+data
+*.db
+*.db-wal
+*.db-shm
+.env
+.env.local
+npm-debug.log*
+docs
+deploy
+README.md
+*.md
+.claude
