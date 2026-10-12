@@ -23,6 +23,8 @@
  * Usage: node scripts/smoke.mjs [baseUrl]
  */
 
+import { request as httpRequest } from "node:http";
+
 const BASE = process.argv[2] ?? "http://localhost:3000";
 const PASSWORD = process.env.STARKVISIONZ_DEMO_PASSWORD?.trim() || "starkvisionz-demo";
 
@@ -55,6 +57,52 @@ const get = (path, init) => fetch(`${BASE}${path}`, { redirect: "manual", ...ini
 console.log("\nauthentication");
 
 check("page redirects when signed out", (await get("/")).status === 307);
+
+// Where it redirects, not just that it does.
+//
+// The version that only counted the 307 passed while the app sent every caller
+// to http://localhost:3000/login — the origin the process is bound to, not the
+// host asked for, which is a dead address behind any reverse proxy. Checking
+// against BASE would not have caught it either, since BASE *is* localhost:3000
+// here. So ask under a different name, the way a proxy does, and require the
+// answer to come back under that name.
+const asHost = (path, headers = {}) =>
+  new Promise((resolve, reject) => {
+    const base = new URL(BASE);
+    const req = httpRequest(
+      { host: base.hostname, port: base.port, path, method: "GET", headers },
+      (res) => {
+        res.resume();
+        resolve({ status: res.statusCode, location: res.headers.location ?? "" });
+      }
+    );
+    req.on("error", reject);
+    req.end();
+  });
+
+const proxied = await asHost("/", { Host: "controls.example.test", "X-Forwarded-Proto": "https" });
+check(
+  "the login redirect uses the host it was asked on",
+  proxied.location.startsWith("https://controls.example.test/login"),
+  proxied.location || "no Location header"
+);
+
+const deep = await asHost("/cost?project=GC-4410", { Host: "controls.example.test" });
+check(
+  "and keeps where you were going",
+  deep.location.includes("next=%2Fcost%3Fproject%3DGC-4410"),
+  deep.location || "no Location header"
+);
+
+// X-Forwarded-Host is caller-supplied and neither nginx site sets it. Reading
+// it would let anyone aim the login page at a host they control, which is a
+// credential harvest rather than a broken link.
+const forged = await asHost("/", { Host: "controls.example.test", "X-Forwarded-Host": "evil.example.test" });
+check(
+  "a forged X-Forwarded-Host cannot steer it",
+  !forged.location.includes("evil.example.test"),
+  forged.location || "no Location header"
+);
 check("read API refuses when signed out", (await get("/api/projects")).status === 401);
 check(
   "write API refuses when signed out",
